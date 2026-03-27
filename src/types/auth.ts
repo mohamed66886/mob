@@ -14,6 +14,10 @@ export interface User {
   role: UserRole;
   university_id?: number | null;
   college_id?: number | null;
+  university_name?: string;
+  university_logo?: string;
+  college_name?: string;
+  college_logo?: string;
 }
 
 export interface LoginResponse {

@@ -46,7 +46,8 @@
     "plugins": [
       "expo-secure-store",
       "expo-audio",
-      "expo-notifications"
+      "expo-notifications",
+      "expo-asset"
     ],
     "extra": {
       "eas": {

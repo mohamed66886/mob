@@ -1,47 +1,41 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import {
   View,
   Text,
   StyleSheet,
-  SafeAreaView,
-  ScrollView,
   Pressable,
   ActivityIndicator,
   Alert,
   Dimensions,
   StatusBar,
   Platform,
+  Animated,
 } from "react-native";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import { usePreventScreenCapture } from "expo-screen-capture";
 import QRCode from "react-native-qrcode-svg";
+import LottieView from "lottie-react-native";
+
+// Ensure your import paths are correct
 import { api } from "../lib/api";
 import { User } from "../types/auth";
-import {
-  QrCode,
-  ScanLine,
-  CheckCircle2,
-  X,
-  Users,
-  Camera,
-} from "lucide-react-native";
+import { QrCode, CheckCircle2, X, Camera, ScanLine } from "lucide-react-native";
 
-// Telegram-like color palette
 const BRAND = {
-  primary: "#3390ec", // Telegram Blue
+  primary: "#3390ec",
   primaryDark: "#2b7cb9",
-  background: "#f1f2f6", // Telegram background
+  background: "#f4f6f9",
   surface: "#FFFFFF",
-  text: "#000000",
-  textMuted: "#707579",
-  border: "#E1E9F2",
+  text: "#1c1c1e",
+  textMuted: "#8e8e93",
+  border: "#E5E5EA",
   danger: "#ff3b30",
-  success: "#34c759", // iOS/Telegram green
+  success: "#34c759",
 };
 
 const { width } = Dimensions.get("window");
 
-// Helper to generate consistent colors for lists
 const getAvatarColor = (name: string) => {
   const colors = ['#e17076', '#faa774', '#a695e7', '#7bc862', '#6ec9cb', '#65aadd', '#ee7aae'];
   const charCode = (name || "X").charCodeAt(0) || 0;
@@ -52,25 +46,33 @@ function authHeaders(token: string) {
   return { headers: { Authorization: `Bearer ${token}` } };
 }
 
-export default function UnifiedQrNativeScreen({
-  token,
-  user,
-}: {
-  token: string;
-  user: User;
-}) {
+// Professional camera frame overlay
+const ScannerOverlay = () => (
+  <View style={styles.scannerOverlay}>
+    <View style={styles.focusFrame}>
+      <View style={[styles.corner, styles.topLeft]} />
+      <View style={[styles.corner, styles.topRight]} />
+      <View style={[styles.corner, styles.bottomLeft]} />
+      <View style={[styles.corner, styles.bottomRight]} />
+      <Animated.View style={styles.scanLine} />
+    </View>
+  </View>
+);
+
+export default function UnifiedQrNativeScreen({ token, user }: { token: string; user: User }) {
   usePreventScreenCapture();
+  const insets = useSafeAreaInsets();
 
   const role = user?.role;
   const isStudent = role === "student";
   const canScan = role === "doctor" || role === "assistant";
   const isAdmin = ["super_admin", "college_admin", "university_admin"].includes(role);
 
+  const [isLoading, setIsLoading] = useState(true);
   const [subjects, setSubjects] = useState<any[]>([]);
   const [selectedSubjectId, setSelectedSubjectId] = useState<number | null>(null);
   const [students, setStudents] = useState<any[]>([]);
   
-  // QR & Scanner States
   const [qrTs, setQrTs] = useState(Date.now());
   const [isScanning, setIsScanning] = useState(false);
   const [scanLock, setScanLock] = useState(false);
@@ -78,30 +80,59 @@ export default function UnifiedQrNativeScreen({
   
   const [permission, requestPermission] = useCameraPermissions();
 
-  // 1. Timer for Dynamic QR
+  // --- Animations ---
+  const scrollY = useRef(new Animated.Value(0)).current;
+  const pulseAnim = useRef(new Animated.Value(1)).current;
+
+  const HEADER_MAX_HEIGHT = 90 + insets.top;
+  const HEADER_MIN_HEIGHT = 60 + insets.top;
+
+  const headerHeight = scrollY.interpolate({
+    inputRange: [0, 100],
+    outputRange: [HEADER_MAX_HEIGHT, HEADER_MIN_HEIGHT],
+    extrapolate: "clamp",
+  });
+
+  const titleOpacity = scrollY.interpolate({
+    inputRange: [0, 50],
+    outputRange: [1, 0],
+    extrapolate: "clamp",
+  });
+
+  // QR Pulse Effect
+  useEffect(() => {
+    if (isStudent) {
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(pulseAnim, { toValue: 1.05, duration: 1500, useNativeDriver: true }),
+          Animated.timing(pulseAnim, { toValue: 1, duration: 1500, useNativeDriver: true }),
+        ])
+      ).start();
+    }
+  }, [isStudent]);
+
+  // Data Fetching & Timers
   useEffect(() => {
     const interval = setInterval(() => setQrTs(Date.now()), 30000);
     return () => clearInterval(interval);
   }, []);
 
-  // 2. Fetch Subjects
   useEffect(() => {
     const fetchSubjects = async () => {
       try {
         const endpoint = isStudent ? "/subjects/my-subjects" : "/subjects";
         const res = await api.get(endpoint, authHeaders(token));
         setSubjects(res.data || []);
-        if (res.data?.length > 0) {
-          setSelectedSubjectId(res.data[0].id);
-        }
+        if (res.data?.length > 0) setSelectedSubjectId(res.data[0].id);
       } catch (err) {
         Alert.alert("Error", "Failed to load subjects");
+      } finally {
+        setIsLoading(false);
       }
     };
     fetchSubjects();
   }, [isStudent, token]);
 
-  // 3. Fetch Students (For Admins/Doctors)
   useEffect(() => {
     if (!selectedSubjectId || isStudent || role === "assistant") {
       setStudents([]);
@@ -118,34 +149,27 @@ export default function UnifiedQrNativeScreen({
     fetchStudents();
   }, [selectedSubjectId, isStudent, role, token]);
 
-  // Handle Barcode Scanned
+  // Scanner Logic
   const handleBarcodeScanned = async ({ data }: { data: string }) => {
     if (scanLock || !selectedSubjectId) return;
     setScanLock(true); 
 
     try {
       const parsedData = JSON.parse(data);
-      
-      if (!parsedData.studentId || !parsedData.ts) {
-        Alert.alert("Invalid QR", "This QR code is not recognized.");
-        setTimeout(() => setScanLock(false), 2000);
-        return;
-      }
+      if (!parsedData.studentId || !parsedData.ts) throw new Error("Invalid QR");
 
       if (Math.abs(Date.now() - parsedData.ts) > 35000) {
-        Alert.alert("Expired", "This QR code has expired. Ask the student to refresh.");
+        Alert.alert("Expired", "This QR code has expired. Ask the student to refresh it.");
         setTimeout(() => setScanLock(false), 2000);
         return;
       }
 
       const endpoint = role === "assistant" ? "/assistants/scan" : "/attendance/scan";
-      const payload = {
+      const res = await api.post(endpoint, {
         studentId: parsedData.studentId,
         subjectId: selectedSubjectId,
         ts: parsedData.ts,
-      };
-
-      const res = await api.post(endpoint, payload, authHeaders(token));
+      }, authHeaders(token));
 
       setScanLog((prev) => [
         {
@@ -157,9 +181,10 @@ export default function UnifiedQrNativeScreen({
         ...prev,
       ]);
       
-      setTimeout(() => setScanLock(false), 1000);
+      // Haptic feedback could be added here
+      setTimeout(() => setScanLock(false), 1200);
     } catch (error) {
-      Alert.alert("Error", "Failed to record attendance. Student might be already scanned.");
+      Alert.alert("Error", "Invalid QR code or student already recorded.");
       setTimeout(() => setScanLock(false), 2000);
     }
   };
@@ -167,116 +192,110 @@ export default function UnifiedQrNativeScreen({
   const startScanner = async () => {
     if (!permission?.granted) {
       const { granted } = await requestPermission();
-      if (!granted) {
-        Alert.alert("Permission required", "We need camera permission to scan QR codes");
-        return;
-      }
+      if (!granted) return Alert.alert("Permission Required", "Camera access is needed to scan QR codes");
     }
     setIsScanning(true);
   };
 
-  // --- Render Helpers ---
-
-  const renderSubjectTabs = () => (
-    <View style={styles.tabsWrapper}>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabsScroll}>
-        {subjects.map((sub) => {
-          const isSelected = sub.id === selectedSubjectId;
-          return (
-            <Pressable
-              key={sub.id}
-              style={[styles.tabBtn, isSelected && styles.tabBtnActive]}
-              onPress={() => setSelectedSubjectId(sub.id)}
-            >
-              <Text style={[styles.tabText, isSelected && styles.tabTextActive]}>
-                {sub.name}
-              </Text>
-              {isSelected && <View style={styles.tabIndicator} />}
-            </Pressable>
-          );
-        })}
-      </ScrollView>
-    </View>
-  );
-
-  const renderStudentQR = () => {
-    if (!selectedSubjectId) return null;
-    const qrPayload = JSON.stringify({
-      studentId: user.id,
-      subjectId: selectedSubjectId,
-      ts: qrTs,
-    });
-
+  // --- Render Components ---
+  if (isLoading) {
     return (
-      <View style={styles.qrHeroSection}>
-        <View style={styles.qrWrapper}>
-          <QRCode
-            value={qrPayload}
-            size={width * 0.65}
-            color={BRAND.primaryDark}
-            backgroundColor={BRAND.surface}
-          />
-        </View>
-        <Text style={styles.qrTitle}>Attendance Pass</Text>
-        <View style={styles.refreshIndicator}>
-          <ActivityIndicator size="small" color={BRAND.primary} style={{ marginRight: 8 }} />
-          <Text style={styles.qrSubtitle}>Auto-refreshes every 30s</Text>
-        </View>
+      <View style={styles.loadingScreen}>
+        <ActivityIndicator size="large" color={BRAND.primary} />
+        <Text style={styles.loadingText}>Preparing system...</Text>
       </View>
     );
-  };
+  }
 
-  const renderScanner = () => {
-    if (!selectedSubjectId) return null;
+  const ListHeader = () => (
+    <View style={styles.headerContainer}>
+      {/* Tabs */}
+      <View style={styles.tabsWrapper}>
+        <Animated.ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabsScroll}>
+          {subjects.map((sub) => {
+            const isSelected = sub.id === selectedSubjectId;
+            return (
+              <Pressable key={sub.id} style={[styles.tabBtn, isSelected && styles.tabBtnActive]} onPress={() => setSelectedSubjectId(sub.id)}>
+                <Text style={[styles.tabText, isSelected && styles.tabTextActive]}>{sub.name}</Text>
+              </Pressable>
+            );
+          })}
+        </Animated.ScrollView>
+      </View>
 
-    return (
-      <View style={styles.sectionContainer}>
-        {!isScanning ? (
-          <View style={styles.listGroup}>
-            <Pressable style={styles.listRow} onPress={startScanner}>
-              <View style={[styles.iconBox, { backgroundColor: BRAND.primary }]}>
-                <Camera color="white" size={24} />
-              </View>
-              <View style={styles.listRowContent}>
-                <Text style={styles.listTitle}>Open QR Scanner</Text>
-                <Text style={styles.listSubtitle}>Scan student attendance passes</Text>
-              </View>
-            </Pressable>
+      {/* Student QR */}
+      {isStudent && (
+        !selectedSubjectId ? (
+          <View style={styles.emptyContainer}>
+            <Text style={styles.emptyText}>No available subjects to generate a QR</Text>
           </View>
         ) : (
-          <View style={styles.scannerWrapper}>
-            <View style={styles.scannerHeader}>
-              <Text style={styles.scannerTitle}>Align QR inside frame</Text>
-              <Pressable onPress={() => setIsScanning(false)} style={styles.closeScannerBtn}>
-                <X color={BRAND.textMuted} size={24} />
-              </Pressable>
-            </View>
-            <View style={styles.cameraBox}>
-              <CameraView
-                style={StyleSheet.absoluteFillObject}
-                facing="back"
-                barcodeScannerSettings={{ barcodeTypes: ["qr"] }}
-                onBarcodeScanned={scanLock ? undefined : handleBarcodeScanned}
+          <View style={styles.qrHeroSection}>
+            <Animated.View style={[styles.qrWrapper, styles.cardShadow, { transform: [{ scale: pulseAnim }] }]}>
+              <QRCode
+                value={JSON.stringify({ studentId: user.id, subjectId: selectedSubjectId, ts: qrTs })}
+                size={width * 0.55}
+                color={BRAND.text}
+                backgroundColor={BRAND.surface}
               />
-              {scanLock && (
-                <View style={styles.scanLockOverlay}>
-                  <ActivityIndicator size="large" color="white" />
-                  <Text style={styles.scanLockText}>Processing...</Text>
-                </View>
-              )}
+            </Animated.View>
+            <Text style={styles.qrTitle}>Attendance Pass</Text>
+            <View style={styles.refreshIndicator}>
+              <ActivityIndicator size="small" color={BRAND.primary} />
+              <Text style={styles.qrSubtitle}>Auto-refreshing for your security</Text>
             </View>
           </View>
-        )}
+        )
+      )}
 
-        {/* Scan Logs (Telegram Grouped List Style) */}
-        {scanLog.length > 0 && (
-          <View style={styles.sectionContainer}>
-            <Text style={styles.sectionTitle}>Recent Scans</Text>
-            <View style={styles.listGroup}>
-              {scanLog.slice(0, 5).map((log, index) => {
-                const isLast = index === Math.min(scanLog.length, 5) - 1;
-                return (
-                  <View key={log.id} style={[styles.listRow, isLast && styles.noBorder]}>
+      {/* Scanner Section */}
+      {canScan && selectedSubjectId && (
+        <View style={styles.sectionContainer}>
+          {!isScanning ? (
+            <View style={[styles.listGroup, styles.cardShadow]}>
+              <Pressable style={styles.listRow} onPress={startScanner}>
+                <View style={[styles.iconBox, { backgroundColor: `${BRAND.primary}15` }]}>
+                  <ScanLine color={BRAND.primary} size={28} />
+                </View>
+                <View style={styles.listRowContent}>
+                  <Text style={styles.listTitle}>Open Scanner</Text>
+                  <Text style={styles.listSubtitle}>Tap to start attendance scanning</Text>
+                </View>
+              </Pressable>
+            </View>
+          ) : (
+            <View style={[styles.scannerWrapper, styles.cardShadow]}>
+              <View style={styles.scannerHeader}>
+                <Text style={styles.scannerTitle}>Point the camera at the student's QR code</Text>
+                <Pressable onPress={() => setIsScanning(false)} style={styles.closeScannerBtn}>
+                  <X color={BRAND.text} size={20} />
+                </Pressable>
+              </View>
+              <View style={styles.cameraBox}>
+                <CameraView
+                  style={StyleSheet.absoluteFillObject}
+                  facing="back"
+                  barcodeScannerSettings={{ barcodeTypes: ["qr"] }}
+                  onBarcodeScanned={scanLock ? undefined : handleBarcodeScanned}
+                />
+                <ScannerOverlay />
+                {scanLock && (
+                  <View style={styles.scanLockOverlay}>
+                    <ActivityIndicator size="large" color="#fff" />
+                    <Text style={styles.scanLockText}>Verifying...</Text>
+                  </View>
+                )}
+              </View>
+            </View>
+          )}
+
+          {/* Scan Log (Recent Scans) */}
+          {scanLog.length > 0 && (
+            <View style={{ marginTop: 20 }}>
+              <Text style={styles.sectionTitle}>Recent Scans</Text>
+              <View style={[styles.listGroup, styles.cardShadow]}>
+                {scanLog.slice(0, 3).map((log, index) => (
+                  <View key={log.id} style={[styles.listRow, index === 2 && styles.noBorder]}>
                     <View style={[styles.avatar, { backgroundColor: getAvatarColor(log.student) }]}>
                       <Text style={styles.avatarText}>{log.student?.charAt(0).toUpperCase() || "S"}</Text>
                     </View>
@@ -286,221 +305,141 @@ export default function UnifiedQrNativeScreen({
                     </View>
                     <CheckCircle2 color={BRAND.success} size={24} />
                   </View>
-                );
-              })}
-            </View>
-          </View>
-        )}
-      </View>
-    );
-  };
-
-  const renderStudentList = () => {
-    if (!students || students.length === 0) return null;
-
-    return (
-      <View style={styles.sectionContainer}>
-        <Text style={styles.sectionTitle}>Enrolled Students ({students.length})</Text>
-        <View style={styles.listGroup}>
-          {students.map((student, index) => {
-            const isLast = index === students.length - 1;
-            return (
-              <View key={student.id || index} style={[styles.listRow, isLast && styles.noBorder]}>
-                <View style={[styles.avatar, { backgroundColor: getAvatarColor(student.name) }]}>
-                  <Text style={styles.avatarText}>{student.name?.charAt(0).toUpperCase() || "S"}</Text>
-                </View>
-                <View style={styles.listRowContent}>
-                  <Text style={styles.listTitle} numberOfLines={1}>{student.name}</Text>
-                  <Text style={styles.listSubtitle}>{student.academic_code} • {student.level_name}</Text>
-                </View>
+                ))}
               </View>
-            );
-          })}
+            </View>
+          )}
         </View>
-      </View>
-    );
-  };
+      )}
+
+      {/* List Title for Students */}
+      {(isAdmin || canScan) && students.length > 0 && (
+        <Text style={[styles.sectionTitle, { marginTop: 24 }]}>
+          Enrolled Students ({students.length})
+        </Text>
+      )}
+    </View>
+  );
 
   return (
-    <SafeAreaView style={styles.screen}>
-      {/* Header */}
-      <View style={styles.header}>
+    <SafeAreaView style={styles.screen} edges={["left", "right"]}>
+      <StatusBar barStyle="dark-content" backgroundColor="transparent" translucent />
+      
+      {/* Animated Header */}
+      <Animated.View style={[styles.header, { height: headerHeight, paddingTop: insets.top }]}>
         <View style={styles.headerLeft}>
-          <QrCode color={BRAND.primaryDark} size={28} />
-          <View style={{ marginLeft: 12 }}>
-            <Text style={styles.headerTitle}>Attendance</Text>
-            <Text style={styles.headerSubtitle}>Unified QR System</Text>
+          <View style={styles.headerIconBg}>
+             <QrCode color={BRAND.primary} size={24} strokeWidth={2.5} />
           </View>
+          <Animated.View style={{ marginLeft: 12, opacity: titleOpacity }}>
+            <Text style={styles.headerTitle}>Attendance System</Text>
+            <Text style={styles.headerSubtitle}>Unified QR Code</Text>
+          </Animated.View>
         </View>
-      </View>
+      </Animated.View>
 
-      {/* Subject Tabs */}
-      {renderSubjectTabs()}
-
-      <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-        {isStudent && renderStudentQR()}
-        {canScan && renderScanner()}
-        {(isAdmin || canScan) && renderStudentList()}
-      </ScrollView>
+      {/* High Performance FlatList */}
+      <Animated.FlatList
+        data={(isAdmin || canScan) ? students : []}
+        keyExtractor={(item, index) => item.id?.toString() || index.toString()}
+        contentContainerStyle={[styles.scrollContent, { paddingTop: HEADER_MAX_HEIGHT }]}
+        showsVerticalScrollIndicator={false}
+        ListHeaderComponent={ListHeader}
+        onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], { useNativeDriver: false })}
+        scrollEventThrottle={16}
+        renderItem={({ item, index }) => {
+          const isLast = index === students.length - 1;
+          return (
+            <View style={[styles.listGroup, styles.cardShadow, { marginBottom: isLast ? 0 : 8 }]}>
+              <View style={[styles.listRow, styles.noBorder]}>
+                <View style={[styles.avatar, { backgroundColor: getAvatarColor(item.name) }]}>
+                  <Text style={styles.avatarText}>{item.name?.charAt(0).toUpperCase() || "S"}</Text>
+                </View>
+                <View style={styles.listRowContent}>
+                  <Text style={styles.listTitle} numberOfLines={1}>{item.name}</Text>
+                  <Text style={styles.listSubtitle}>{item.academic_code} • {item.level_name}</Text>
+                </View>
+              </View>
+            </View>
+          );
+        }}
+      />
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  screen: {
-    flex: 1,
-    backgroundColor: BRAND.background,
-    paddingTop: Platform.OS === "android" ? (StatusBar.currentHeight || 0) : 0,
-  },
-  scrollContent: { padding: 16, paddingBottom: 40 },
+  screen: { flex: 1, backgroundColor: BRAND.background },
+  loadingScreen: { flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: BRAND.background },
+  loadingText: { fontSize: 16, color: BRAND.textMuted, marginTop: 12, fontWeight: "600" },
+  scrollContent: { paddingHorizontal: 16, paddingBottom: 40 },
+  headerContainer: { paddingBottom: 16 },
   
-  // Header
+  cardShadow: {
+    backgroundColor: BRAND.surface, borderRadius: 16,
+    ...Platform.select({
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.05, shadowRadius: 10 },
+      android: { elevation: 2 },
+    }),
+  },
+
   header: { 
-    flexDirection: "row", 
-    alignItems: "center", 
-    paddingHorizontal: 16, 
-    paddingTop: 16,
-    paddingBottom: 8,
-    backgroundColor: BRAND.surface, 
+    position: "absolute", top: 0, left: 0, right: 0, flexDirection: "row", alignItems: "center", paddingHorizontal: 20, backgroundColor: BRAND.surface, zIndex: 10,
+    ...Platform.select({
+      android: { elevation: 3 },
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.05, shadowRadius: 4 },
+    }),
   },
   headerLeft: { flexDirection: "row", alignItems: "center" },
-  headerTitle: { fontSize: 20, fontWeight: "700", color: BRAND.text },
-  headerSubtitle: { fontSize: 13, color: BRAND.textMuted },
+  headerIconBg: { backgroundColor: `${BRAND.primary}15`, padding: 10, borderRadius: 14 },
+  headerTitle: { fontSize: 22, fontWeight: "800", color: BRAND.text },
+  headerSubtitle: { fontSize: 13, color: BRAND.textMuted, fontWeight: "500" },
 
-  // Tabs
-  tabsWrapper: {
-    backgroundColor: BRAND.surface,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: BRAND.border,
-  },
-  tabsScroll: { paddingHorizontal: 8 },
-  tabBtn: { paddingVertical: 14, paddingHorizontal: 16, position: "relative" },
-  tabBtnActive: {},
+  tabsWrapper: { paddingVertical: 12 },
+  tabsScroll: { gap: 10, paddingRight: 16 },
+  tabBtn: { paddingVertical: 10, paddingHorizontal: 20, borderRadius: 24, backgroundColor: BRAND.border, borderWidth: 1, borderColor: BRAND.border },
+  tabBtnActive: { backgroundColor: BRAND.primary, borderColor: BRAND.primaryDark },
   tabText: { fontSize: 15, fontWeight: "600", color: BRAND.textMuted },
-  tabTextActive: { color: BRAND.primary },
-  tabIndicator: {
-    position: "absolute",
-    bottom: -1,
-    left: 12,
-    right: 12,
-    height: 3,
-    backgroundColor: BRAND.primary,
-    borderTopLeftRadius: 3,
-    borderTopRightRadius: 3,
-  },
+  tabTextActive: { color: "#FFF" },
 
-  // Student QR Hero Section
-  qrHeroSection: {
-    alignItems: "center",
-    justifyContent: "center",
-    paddingVertical: 40,
-  },
-  qrWrapper: {
-    padding: 20,
-    backgroundColor: BRAND.surface,
-    borderRadius: 24,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.1,
-    shadowRadius: 12,
-    elevation: 5,
-    marginBottom: 24,
-  },
-  qrTitle: {
-    fontSize: 22,
-    fontWeight: "700",
-    color: BRAND.text,
-    marginBottom: 8,
-  },
-  refreshIndicator: {
-    flexDirection: "row",
-    alignItems: "center",
-  },
-  qrSubtitle: {
-    fontSize: 14,
-    color: BRAND.textMuted,
-    fontWeight: "500",
-  },
+  emptyContainer: { alignItems: "center", marginTop: 40, padding: 20 },
+  emptyText: { fontSize: 16, color: BRAND.textMuted, fontWeight: "500" },
 
-  // Shared Grouped Lists (Telegram Style)
-  sectionContainer: { marginBottom: 24 },
-  sectionTitle: {
-    fontSize: 15,
-    fontWeight: "600",
-    color: BRAND.textMuted,
-    marginLeft: 16,
-    marginBottom: 8,
-    textTransform: "uppercase",
-    letterSpacing: 0.5,
-  },
-  listGroup: {
-    backgroundColor: BRAND.surface,
-    borderRadius: 14,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: BRAND.border,
-    overflow: "hidden",
-  },
-  listRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    backgroundColor: BRAND.surface,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: BRAND.border,
-  },
+  qrHeroSection: { alignItems: "center", justifyContent: "center", paddingVertical: 32 },
+  qrWrapper: { padding: 24, marginBottom: 24, borderRadius: 24, backgroundColor: "#fff" },
+  qrTitle: { fontSize: 22, fontWeight: "800", color: BRAND.text, marginBottom: 12 },
+  refreshIndicator: { flexDirection: "row", alignItems: "center", backgroundColor: `${BRAND.primary}10`, paddingHorizontal: 16, paddingVertical: 10, borderRadius: 24, gap: 8 },
+  qrSubtitle: { fontSize: 14, color: BRAND.primaryDark, fontWeight: "600" },
+
+  sectionContainer: { marginTop: 16 },
+  sectionTitle: { fontSize: 15, fontWeight: "700", color: BRAND.textMuted, marginBottom: 12, marginLeft: 4, textTransform: "uppercase" },
+  listGroup: { overflow: "hidden" },
+  listRow: { flexDirection: "row", alignItems: "center", paddingVertical: 16, paddingHorizontal: 16, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: BRAND.border },
   noBorder: { borderBottomWidth: 0 },
-  iconBox: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    justifyContent: "center",
-    alignItems: "center",
-    marginRight: 14,
-  },
-  listRowContent: { flex: 1, justifyContent: "center" },
-  listTitle: { fontSize: 16, fontWeight: "600", color: BRAND.text, marginBottom: 2 },
-  listSubtitle: { fontSize: 13, color: BRAND.textMuted },
+  iconBox: { width: 48, height: 48, borderRadius: 14, justifyContent: "center", alignItems: "center", marginRight: 16 },
+  listRowContent: { flex: 1, justifyContent: "center", gap: 2 },
+  listTitle: { fontSize: 16, fontWeight: "700", color: BRAND.text },
+  listSubtitle: { fontSize: 14, color: BRAND.textMuted },
   
-  avatar: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    justifyContent: "center",
-    alignItems: "center",
-    marginRight: 14,
-  },
-  avatarText: { color: "white", fontSize: 18, fontWeight: "600" },
+  avatar: { width: 46, height: 46, borderRadius: 14, justifyContent: "center", alignItems: "center", marginRight: 16 },
+  avatarText: { color: "white", fontSize: 18, fontWeight: "800" },
 
-  // Scanner UI
-  scannerWrapper: {
-    backgroundColor: BRAND.surface,
-    borderRadius: 16,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: BRAND.border,
-    overflow: "hidden",
-    marginBottom: 16,
-  },
-  scannerHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    padding: 16,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: BRAND.border,
-  },
-  scannerTitle: { fontSize: 16, fontWeight: "600", color: BRAND.text },
-  closeScannerBtn: { padding: 4, backgroundColor: BRAND.background, borderRadius: 16 },
-  cameraBox: {
-    width: "100%",
-    height: width * 0.9,
-    position: "relative",
-  },
-  scanLockOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: "rgba(0,0,0,0.6)",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  scanLockText: { color: "white", fontSize: 16, fontWeight: "600", marginTop: 12 },
+  scannerWrapper: { overflow: "hidden", borderRadius: 16 },
+  scannerHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", padding: 16, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: BRAND.border, backgroundColor: BRAND.surface },
+  scannerTitle: { fontSize: 16, fontWeight: "700", color: BRAND.text },
+  closeScannerBtn: { padding: 6, backgroundColor: BRAND.background, borderRadius: 20 },
+  cameraBox: { width: "100%", height: width * 1.1, position: "relative", backgroundColor: "#000" },
+  
+  // Scanner Overlay Styles
+  scannerOverlay: { ...StyleSheet.absoluteFillObject, justifyContent: "center", alignItems: "center" },
+  focusFrame: { width: 220, height: 220, position: "relative" },
+  corner: { position: "absolute", width: 40, height: 40, borderColor: BRAND.primary, borderWidth: 4 },
+  topLeft: { top: 0, left: 0, borderBottomWidth: 0, borderRightWidth: 0, borderTopLeftRadius: 16 },
+  topRight: { top: 0, right: 0, borderBottomWidth: 0, borderLeftWidth: 0, borderTopRightRadius: 16 },
+  bottomLeft: { bottom: 0, left: 0, borderTopWidth: 0, borderRightWidth: 0, borderBottomLeftRadius: 16 },
+  bottomRight: { bottom: 0, right: 0, borderTopWidth: 0, borderLeftWidth: 0, borderBottomRightRadius: 16 },
+  scanLine: { position: "absolute", width: "100%", height: 2, backgroundColor: BRAND.success, top: "50%", opacity: 0.6 },
+
+  scanLockOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(0,0,0,0.8)", justifyContent: "center", alignItems: "center", zIndex: 10 },
+  scanLockText: { color: "white", fontSize: 18, fontWeight: "700", marginTop: 16 },
 });

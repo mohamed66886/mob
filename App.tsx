@@ -1,14 +1,15 @@
+import 'react-native-gesture-handler';
+import 'react-native-reanimated';
 import { StatusBar } from "expo-status-bar";
 import Constants from "expo-constants";
 import * as Notifications from "expo-notifications";
 import { CameraView, useCameraPermissions } from "expo-camera";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ComponentType, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as DocumentPicker from "expo-document-picker";
 import {
   ActivityIndicator,
   FlatList,
   Image,
-  KeyboardAvoidingView,
   Linking,
   Modal,
   Platform,
@@ -25,6 +26,7 @@ import {
   NavigationContainer,
   RouteProp,
 } from "@react-navigation/native";
+import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import {
@@ -49,11 +51,36 @@ import MaterialsScreenNative from "./src/screens/MaterialsNativeScreen";
 import TasksScreenNative from "./src/screens/TasksNativeScreen";
 import WorkspaceNativeScreen from "./src/screens/WorkspaceNativeScreen";
 import WorkspaceRoomChatNativeScreen from "./src/screens/WorkspaceRoomChatNativeScreen";
-import WorkspaceRoomProfileNativeScreen from "./src/screens/WorkspaceRoomProfileNativeScreen";
 import SubjectMaterialsNativeScreen from "./src/screens/SubjectMaterialsNativeScreen";
-import MaterialViewerNativeScreen from "./src/screens/MaterialViewerNativeScreen";
 import AccountNativeScreen from "./src/screens/AccountNativeScreen";
+import LoginNativeScreen from "./src/screens/LoginNativeScreen";
+import BootLoadingScreen from "./src/screens/BootLoadingScreen";
 import MainTabsNavigator from "./src/components/MainTabsNavigator";
+
+type WorkspaceRoomProfileScreenProps = {
+  token: string;
+  user: User;
+  route?: any;
+  navigation?: any;
+};
+
+const WorkspaceRoomProfileNativeScreen = require("./src/screens/WorkspaceRoomProfileNativeScreen").default as ComponentType<WorkspaceRoomProfileScreenProps>;
+
+// Lazy-load MaterialViewerNativeScreen to prevent NativeEventEmitter error in Expo Go
+type MaterialViewerScreenProps = {
+  token: string;
+  user: User;
+  route?: any;
+  navigation?: any;
+};
+
+const MaterialViewerFallback = require("./src/screens/MaterialViewerNativeScreen.expo").default as ComponentType<MaterialViewerScreenProps>;
+let MaterialViewerNativeScreen: ComponentType<MaterialViewerScreenProps> = MaterialViewerFallback;
+try {
+  MaterialViewerNativeScreen = require("./src/screens/MaterialViewerNativeScreen").default as ComponentType<MaterialViewerScreenProps>;
+} catch (e) {
+  // Fallback for Expo Go (native modules not available).
+}
 
 type PageItem = {
   key: string;
@@ -175,19 +202,6 @@ function resolveUploadUrl(fileUrl?: string | null) {
   return `${base}${fileUrl.startsWith("/") ? "" : "/"}${fileUrl}`;
 }
 
-function parseQrLoginPayload(raw: string) {
-  try {
-    const parsed = JSON.parse(String(raw || ""));
-    const username = String(parsed?.username || "").trim();
-    const password = String(parsed?.password || "").trim();
-
-    if (!username || !password) return null;
-    return { username, password };
-  } catch {
-    return null;
-  }
-}
-
 type RootStackParamList = {
   Main: undefined;
   PageDetails: { page: PageItem };
@@ -235,240 +249,6 @@ const nativeRouteByKey: Partial<Record<PageItem["key"], keyof RootStackParamList
   workspace: "WorkspacesNative",
   workspaces: "WorkspacesNative",
 };
-
-function QrLoginScannerModal({
-  visible,
-  onClose,
-  onScanned,
-}: {
-  visible: boolean;
-  onClose: () => void;
-  onScanned: (username: string, password: string) => void;
-}) {
-  const [permission, requestPermission] = useCameraPermissions();
-  const [error, setError] = useState<string | null>(null);
-  const [isProcessing, setIsProcessing] = useState(false);
-
-  useEffect(() => {
-    if (!visible) {
-      setError(null);
-      setIsProcessing(false);
-    }
-  }, [visible]);
-
-  const handleScan = useCallback(
-    ({ data }: { data: string }) => {
-      if (isProcessing) return;
-
-      setIsProcessing(true);
-      const payload = parseQrLoginPayload(data);
-
-      if (!payload) {
-        setError("Invalid QR code. Please scan valid login credentials.");
-        setTimeout(() => setIsProcessing(false), 1000);
-        return;
-      }
-
-      onScanned(payload.username, payload.password);
-      onClose();
-      setTimeout(() => setIsProcessing(false), 250);
-    },
-    [isProcessing, onClose, onScanned],
-  );
-
-  return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <View style={styles.modalBackdrop}>
-        <View style={styles.modalCard}>
-          <View style={styles.modalHeaderRow}>
-            <Text style={styles.modalTitle}>Scan Login QR Code</Text>
-            <Pressable onPress={onClose} style={styles.modalCloseButton}>
-              <Ionicons name="close" size={18} color="#0F172A" />
-            </Pressable>
-          </View>
-
-          {!permission ? <ActivityIndicator color={BRAND.primary} /> : null}
-
-          {permission && !permission.granted ? (
-            <View>
-              <Text style={styles.pageSubtitle}>Camera permission is required.</Text>
-              <Pressable onPress={requestPermission} style={styles.refreshBtn}>
-                <Text style={styles.refreshBtnText}>Grant Camera Access</Text>
-              </Pressable>
-            </View>
-          ) : null}
-
-          {permission?.granted ? (
-            <View style={styles.scannerCard}>
-              <CameraView
-                style={styles.cameraView}
-                barcodeScannerSettings={{ barcodeTypes: ["qr"] }}
-                onBarcodeScanned={handleScan}
-              />
-            </View>
-          ) : null}
-
-          {error ? <Text style={styles.errorText}>{error}</Text> : null}
-        </View>
-      </View>
-    </Modal>
-  );
-}
-
-function LoginScreen({
-  onLogin,
-  loading,
-}: {
-  onLogin: (username: string, password: string) => Promise<void>;
-  loading: boolean;
-}) {
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
-  const [showPassword, setShowPassword] = useState(false);
-  const [showQrScanner, setShowQrScanner] = useState(false);
-  const [alert, setAlert] = useState<{
-    type: "error" | "success";
-    message: string;
-  } | null>(null);
-
-  const handleSubmit = useCallback(async () => {
-    setAlert(null);
-
-    if (!username.trim() || !password.trim()) {
-      setAlert({
-        type: "error",
-        message: "Please enter both username and password",
-      });
-      return;
-    }
-
-    try {
-      await onLogin(username.trim(), password.trim());
-      setAlert({ type: "success", message: "Login successful!" });
-    } catch (error: any) {
-      setAlert({
-        type: "error",
-        message: error?.message || "Login failed. Please try again.",
-      });
-    }
-  }, [onLogin, password, username]);
-
-  return (
-    <SafeAreaView style={styles.loginScreen}>
-      <QrLoginScannerModal
-        visible={showQrScanner}
-        onClose={() => setShowQrScanner(false)}
-        onScanned={(nextUsername, nextPassword) => {
-          setUsername(nextUsername);
-          setPassword(nextPassword);
-          setAlert({ type: "success", message: "QR credentials captured." });
-        }}
-      />
-
-      <StatusBar style="dark" />
-      <KeyboardAvoidingView
-        behavior={Platform.OS === "ios" ? "padding" : "height"}
-        style={styles.loginScreen}
-      >
-        <ScrollView contentContainerStyle={styles.loginScroll}>
-          <View style={styles.loginTopBanner}>
-            <View style={styles.loginBlobRight} />
-            <View style={styles.loginBlobLeft} />
-            <Image
-              source={require("./assets/icon.png")}
-              style={styles.loginLogo}
-              resizeMode="contain"
-            />
-            <Text style={styles.loginBannerTitle}>University Attendance</Text>
-            <Text style={styles.loginBannerSubTitle}>QR Code Technology</Text>
-          </View>
-
-          <View style={styles.loginCard}>
-            {!!alert && (
-              <View
-                style={[
-                  styles.loginAlert,
-                  alert.type === "error"
-                    ? styles.loginAlertError
-                    : styles.loginAlertSuccess,
-                ]}
-              >
-                <Text style={styles.loginAlertText}>{alert.message}</Text>
-              </View>
-            )}
-
-            <Text style={styles.loginLabel}>Username *</Text>
-            <TextInput
-              value={username}
-              onChangeText={setUsername}
-              autoCapitalize="none"
-              placeholder="Enter your username"
-              style={styles.loginInput}
-              editable={!loading}
-            />
-
-            <Text style={styles.loginLabel}>Password *</Text>
-            <View style={styles.loginPasswordWrapper}>
-              <TextInput
-                value={password}
-                onChangeText={setPassword}
-                placeholder="Enter your password"
-                secureTextEntry={!showPassword}
-                style={[styles.loginInput, styles.loginPasswordInput]}
-                editable={!loading}
-              />
-              <Pressable
-                onPress={() => setShowPassword((prev) => !prev)}
-                style={styles.loginPasswordToggle}
-              >
-                <Ionicons
-                  name={showPassword ? "eye-off-outline" : "eye-outline"}
-                  size={20}
-                  color="#64748B"
-                />
-              </Pressable>
-            </View>
-
-            <View style={styles.loginActionsRow}>
-              <Pressable
-                onPress={() => setShowQrScanner(true)}
-                style={styles.loginQrButton}
-              >
-                <MaterialCommunityIcons
-                  name="qrcode-scan"
-                  size={22}
-                  color={BRAND.primary}
-                />
-              </Pressable>
-
-              <Pressable
-                onPress={handleSubmit}
-                style={[
-                  styles.loginSubmitButton,
-                  loading && styles.primaryButtonDisabled,
-                ]}
-                disabled={loading}
-              >
-                {loading ? (
-                  <ActivityIndicator color="#fff" />
-                ) : (
-                  <>
-                    <Ionicons name="log-in-outline" size={18} color="#fff" />
-                    <Text style={styles.loginSubmitText}>Login</Text>
-                  </>
-                )}
-              </Pressable>
-            </View>
-
-            <Text style={styles.loginFooterText}>
-              Designed by Fulk Company - Mohamad Rashad & Abdel-Hameed Mohammad
-            </Text>
-          </View>
-        </ScrollView>
-      </KeyboardAvoidingView>
-    </SafeAreaView>
-  );
-}
 
 function HomeScreen({ user }: { user: User }) {
   return (
@@ -2297,7 +2077,7 @@ function MainTabs({
       renderQr={() => <QrNativeScreen token={token} user={user} />}
       renderMaterials={() => <MaterialsScreenNative token={token} />}
       renderTasks={() => <TasksScreenNative token={token} user={user} />}
-      renderWorkspaces={(props) => <WorkspaceNativeScreen {...props} token={token} user={user} />}
+      renderWorkspaces={(props: any) => <WorkspaceNativeScreen {...props} token={token} user={user} />}
       renderAccount={() => <AccountNativeScreen user={user} onLogout={onLogout} />}
     />
   );
@@ -2560,7 +2340,16 @@ export default function App() {
       const result = await login(username, password);
       await saveToken(result.token);
       setToken(result.token);
-      setUser(result.user);
+      
+      // Fetch full user data with logos
+      try {
+        const fullUserData = await getMe(result.token);
+        setUser(fullUserData);
+      } catch (err) {
+        // Fallback to login response if /me fails
+        console.warn("Failed to fetch full user data, using login response:", err);
+        setUser(result.user);
+      }
     } catch (error: any) {
       const message =
         error?.response?.data?.error || "Login failed. Please try again.";
@@ -2583,21 +2372,16 @@ export default function App() {
   }, [token]);
 
   if (isBooting) {
-    return (
-      <SafeAreaView style={styles.bootScreen}>
-        <StatusBar style="dark" />
-        <ActivityIndicator size="large" color={BRAND.primary} />
-        <Text style={styles.subtitle}>Checking your session...</Text>
-      </SafeAreaView>
-    );
+    return <BootLoadingScreen />;
   }
 
   if (!token || !user) {
-    return <LoginScreen onLogin={handleLogin} loading={isAuthLoading} />;
+    return <LoginNativeScreen onLogin={handleLogin} loading={isAuthLoading} />;
   }
 
   return (
-    <View style={{ flex: 1 }}>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <View style={{ flex: 1 }}>
       <NavigationContainer ref={navigationRef}>
         <RootStack.Navigator
         screenOptions={{
@@ -2640,7 +2424,7 @@ export default function App() {
         <RootStack.Screen name="StudentsNative" options={{ title: "Students" }}>
           {() => <StudentsNativeScreen token={token} />}
         </RootStack.Screen>
-        <RootStack.Screen name="SubjectsNative" options={{ title: "Subjects" }}>
+        <RootStack.Screen name="SubjectsNative" options={{ headerShown: false }}>
           {() => <SubjectsNativeScreen token={token} />}
         </RootStack.Screen>
         <RootStack.Screen name="TasksNative" options={{ title: "Tasks" }}>
@@ -2655,14 +2439,12 @@ export default function App() {
         <RootStack.Screen name="MaterialsNative" options={{ title: "Materials" }}>
           {() => <MaterialsScreenNative token={token} />}
         </RootStack.Screen>
-        <RootStack.Screen name="SubjectMaterialsNative" options={({ route }) => ({ title: `Subject ${route.params.subjectId}` })}>
+        <RootStack.Screen name="SubjectMaterialsNative" options={{ headerShown: false }}>
           {(props) => <SubjectMaterialsNativeScreen {...props} token={token} user={user} />}
         </RootStack.Screen>
         <RootStack.Screen
           name="MaterialViewerNative"
-          options={({ route }) => ({
-            title: route.params.title || "Material Viewer",
-          })}
+          options={{ headerShown: false }}
         >
           {(props) => <MaterialViewerNativeScreen {...props} token={token} user={user} />}
         </RootStack.Screen>
@@ -2689,9 +2471,7 @@ export default function App() {
         </RootStack.Screen>
         <RootStack.Screen
           name="WorkspaceRoomProfileNative"
-          options={({ route }) => ({
-            title: route.params.roomName || "Group Info",
-          })}
+          options={{ headerShown: false }}
         >
           {(props) => <WorkspaceRoomProfileNativeScreen {...props} token={token} user={user} />}
         </RootStack.Screen>
@@ -2722,7 +2502,8 @@ export default function App() {
           </Text>
         </Pressable>
       ) : null}
-    </View>
+      </View>
+    </GestureHandlerRootView>
   );
 }
 
@@ -2761,14 +2542,6 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: "700",
   },
-  bootScreen: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    gap: 10,
-    backgroundColor: BRAND.background,
-    paddingHorizontal: SCREEN_SIDE_PADDING,
-  },
   liveNotificationBanner: {
     position: "absolute",
     top: Platform.OS === "ios" ? 58 : 24,
@@ -2793,180 +2566,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 16,
   },
-  loginScreen: {
-    flex: 1,
-    backgroundColor: BRAND.primaryDimmed,
-  },
-  loginScroll: {
-    flexGrow: 1,
-  },
-  loginTopBanner: {
-    backgroundColor: BRAND.primary,
-    paddingTop: 38,
-    paddingBottom: 58,
-    paddingHorizontal: 24,
-    alignItems: "center",
-    position: "relative",
-    overflow: "hidden",
-  },
-  loginBlobRight: {
-    position: "absolute",
-    top: -38,
-    right: -38,
-    width: 140,
-    height: 140,
-    borderRadius: 999,
-    backgroundColor: "rgba(255,255,255,0.16)",
-  },
-  loginBlobLeft: {
-    position: "absolute",
-    bottom: -26,
-    left: -26,
-    width: 90,
-    height: 90,
-    borderRadius: 999,
-    backgroundColor: "rgba(255,255,255,0.16)",
-  },
-  loginLogo: {
-    width: 108,
-    height: 108,
-    marginBottom: 8,
-  },
-  loginBannerTitle: {
-    color: "#FFFFFF",
-    fontSize: 18,
-    fontWeight: "800",
-  },
-  loginBannerSubTitle: {
-    color: BRAND.secondary,
-    marginTop: 2,
-    fontSize: 12,
-    fontWeight: "600",
-  },
-  loginCard: {
-    flex: 1,
-    backgroundColor: BRAND.surface,
-    marginTop: -24,
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    paddingHorizontal: SCREEN_SIDE_PADDING,
-    paddingTop: 18,
-    paddingBottom: 20,
-  },
-  loginAlert: {
-    borderRadius: 14,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    marginBottom: 12,
-  },
-  loginAlertError: {
-    backgroundColor: BRAND.danger,
-  },
-  loginAlertSuccess: {
-    backgroundColor: BRAND.success,
-  },
-  loginAlertText: {
-    color: "#FFFFFF",
-    fontSize: 13,
-    fontWeight: "600",
-  },
-  loginLabel: {
-    fontSize: 14,
-    color: BRAND.primaryDark,
-    marginBottom: 6,
-    fontWeight: "700",
-  },
-  loginInput: {
-    borderRadius: 16,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    fontSize: 14,
-    color: BRAND.text,
-    marginBottom: 14,
-    backgroundColor: "#EEF3FA",
-  },
-  loginPasswordWrapper: {
-    position: "relative",
-  },
-  loginPasswordInput: {
-    paddingRight: 48,
-    marginBottom: 14,
-  },
-  loginPasswordToggle: {
-    position: "absolute",
-    right: 14,
-    top: 13,
-  },
-  loginActionsRow: {
-    flexDirection: "row",
-    marginTop: 4,
-  },
-  loginQrButton: {
-    width: 56,
-    height: 52,
-    borderTopLeftRadius: 16,
-    borderBottomLeftRadius: 16,
-    backgroundColor: "#EAF0F8",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  loginSubmitButton: {
-    flex: 1,
-    height: 52,
-    backgroundColor: BRAND.primary,
-    borderTopRightRadius: 16,
-    borderBottomRightRadius: 16,
-    alignItems: "center",
-    justifyContent: "center",
-    flexDirection: "row",
-    gap: 8,
-  },
-  primaryButtonDisabled: {
-    opacity: 0.7,
-  },
-  loginSubmitText: {
-    color: "#FFFFFF",
-    fontSize: 14,
-    fontWeight: "700",
-  },
-  loginFooterText: {
-    marginTop: 22,
-    color: "#94A3B8",
-    fontSize: 11,
-    textAlign: "center",
-  },
-  modalBackdrop: {
-    flex: 1,
-    backgroundColor: "rgba(0,0,0,0.6)",
-    justifyContent: "center",
-    paddingHorizontal: 18,
-  },
-  modalCard: {
-    backgroundColor: BRAND.surface,
-    borderRadius: 16,
-    padding: 14,
-    borderWidth: 1,
-    borderColor: BRAND.border,
-  },
-  modalHeaderRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginBottom: 10,
-  },
-  modalTitle: {
-    fontSize: 15,
-    fontWeight: "700",
-    color: BRAND.text,
-  },
-  modalCloseButton: {
-    width: 30,
-    height: 30,
-    borderRadius: 999,
-    backgroundColor: BRAND.primaryDimmed,
-    alignItems: "center",
-    justifyContent: "center",
-  },
   refreshBtn: {
     alignSelf: "flex-start",
     backgroundColor: BRAND.primary,
@@ -2979,6 +2578,9 @@ const styles = StyleSheet.create({
     color: "#FFFFFF",
     fontSize: 12,
     fontWeight: "700",
+  },
+  primaryButtonDisabled: {
+    opacity: 0.7,
   },
   rowActions: {
     flexDirection: "row",

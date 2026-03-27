@@ -20,6 +20,9 @@ const BRAND = {
   border: "#E2E8F0",
 };
 
+/**
+ * Web-safe implementation (no react-native-pdf for web)
+ */
 export default function MaterialViewerNativeScreen({
   route,
 }: {
