@@ -45,6 +45,7 @@ import {
 import { disconnectRealtimeSocket, getRealtimeSocket } from "./src/lib/realtime";
 import { clearToken, getToken, saveToken } from "./src/lib/tokenStorage";
 import { User, UserRole } from "./src/types/auth";
+import { ErrorBoundary } from "./src/components/ErrorBoundary";
 import DashboardNativeScreen from "./src/screens/DashboardNativeScreen";
 import QrNativeScreen from "./src/screens/QrNativeScreen";
 import MaterialsScreenNative from "./src/screens/MaterialsNativeScreen";
@@ -2338,21 +2339,42 @@ export default function App() {
     setIsAuthLoading(true);
     try {
       const result = await login(username, password);
+      if (!result?.token) {
+        throw new Error("No auth token received from server");
+      }
+
       await saveToken(result.token);
       setToken(result.token);
       
       // Fetch full user data with logos
       try {
         const fullUserData = await getMe(result.token);
-        setUser(fullUserData);
-      } catch (err) {
+        if (fullUserData && fullUserData.id) {
+          setUser(fullUserData);
+        } else {
+          throw new Error("Invalid user data from server");
+        }
+      } catch (err: any) {
         // Fallback to login response if /me fails
         console.warn("Failed to fetch full user data, using login response:", err);
-        setUser(result.user);
+        const fallbackUser = result.user || {
+          id: 0,
+          name: "User",
+          username,
+          role: "student" as const,
+          university_id: null,
+          college_id: null,
+        };
+        if (fallbackUser.id) {
+          setUser(fallbackUser);
+        } else {
+          throw new Error("Failed to get user data");
+        }
       }
     } catch (error: any) {
+      console.error("Login error:", error);
       const message =
-        error?.response?.data?.error || "Login failed. Please try again.";
+        error?.response?.data?.error || error?.message || "Login failed. Please try again.";
       throw new Error(message);
     } finally {
       setIsAuthLoading(false);
@@ -2372,17 +2394,26 @@ export default function App() {
   }, [token]);
 
   if (isBooting) {
-    return <BootLoadingScreen />;
+    return (
+      <ErrorBoundary>
+        <BootLoadingScreen />
+      </ErrorBoundary>
+    );
   }
 
   if (!token || !user) {
-    return <LoginNativeScreen onLogin={handleLogin} loading={isAuthLoading} />;
+    return (
+      <ErrorBoundary>
+        <LoginNativeScreen onLogin={handleLogin} loading={isAuthLoading} />
+      </ErrorBoundary>
+    );
   }
 
   return (
-    <GestureHandlerRootView style={{ flex: 1 }}>
-      <View style={{ flex: 1 }}>
-      <NavigationContainer ref={navigationRef}>
+    <ErrorBoundary>
+      <GestureHandlerRootView style={{ flex: 1 }}>
+        <View style={{ flex: 1 }}>
+          <NavigationContainer ref={navigationRef}>
         <RootStack.Navigator
         screenOptions={{
           headerStyle: { backgroundColor: BRAND.surface },
@@ -2504,6 +2535,7 @@ export default function App() {
       ) : null}
       </View>
     </GestureHandlerRootView>
+    </ErrorBoundary>
   );
 }
 

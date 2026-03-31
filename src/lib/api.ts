@@ -49,28 +49,30 @@ export async function getMe(token: string) {
   
   // Flatten nested role-specific data into User object
   const user: User = {
-    id: data.id,
-    name: data.name,
-    username: data.username,
-    role: data.role,
-    university_id: data.university_id,
-    college_id: data.college_id,
+    id: data?.id,
+    name: data?.name || "User",
+    username: data?.username,
+    role: data?.role || "student",
+    university_id: data?.university_id,
+    college_id: data?.college_id,
   };
 
   // Extract logos and names from role-specific nested objects
-  const roleData = data[data.role]; // e.g., data.student, data.doctor, data.employee
-  if (roleData) {
+  const role = String(data?.role || "").toLowerCase().trim();
+  const roleData = role ? data?.[role] : null;
+  
+  if (roleData && typeof roleData === "object") {
     user.college_logo = resolveMediaUrl(roleData.college_logo);
     user.university_logo = resolveMediaUrl(roleData.university_logo);
-    user.college_name = roleData.college_name;
-    user.university_name = roleData.university_name;
+    user.college_name = roleData.college_name || data?.college_name;
+    user.university_name = roleData.university_name || data?.university_name;
   }
   
   // For college_admin and employee, logos might be at top level
-  if (data.college_logo) user.college_logo = resolveMediaUrl(data.college_logo);
-  if (data.university_logo) user.university_logo = resolveMediaUrl(data.university_logo);
-  if (data.college_name) user.college_name = data.college_name;
-  if (data.university_name) user.university_name = data.university_name;
+  if (data?.college_logo) user.college_logo = resolveMediaUrl(data.college_logo);
+  if (data?.university_logo) user.university_logo = resolveMediaUrl(data.university_logo);
+  if (data?.college_name) user.college_name = data.college_name;
+  if (data?.university_name) user.university_name = data.university_name;
 
   return user;
 }

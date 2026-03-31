@@ -6,11 +6,11 @@ import {
   Text, 
   Pressable, 
   Dimensions, 
-  I18nManager 
+  I18nManager,
+  ActivityIndicator,
 } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
 import { Ionicons } from "@expo/vector-icons";
-import { useFonts } from "expo-font";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Animated, {
@@ -232,7 +232,6 @@ export default function MainTabsNavigator({
   userRole,
   primaryColor = "#3390ec",
 }: MainTabsNavigatorProps) {
-  const [iconsLoaded] = useFonts(Ionicons.font);
   const insets = useSafeAreaInsets();
   
   const [pendingTasksCount, setPendingTasksCount] = useState(0); 
@@ -303,7 +302,7 @@ export default function MainTabsNavigator({
     };
   }, [refreshBadges, token]);
 
-  if (!iconsLoaded) return null;
+
 
   return (
     <Tabs.Navigator
