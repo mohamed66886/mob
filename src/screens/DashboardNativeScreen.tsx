@@ -47,6 +47,7 @@ import {
   BookOpen,
   Users,
   Smile,
+  ClipboardCheck,
 } from "lucide-react-native";
 
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
@@ -235,11 +236,12 @@ function StudentDashboard({ token, onOpenScreen }: any) {
     <View style={styles.sectionContainer}>
       
       {/* Quick Actions */}
-      <Animated.View entering={FadeInDown.delay(200).springify()} style={styles.actionCardsRow}>
+      <Animated.View entering={FadeInDown.delay(200).springify()} style={[styles.actionCardsRow, { flexWrap: "wrap", justifyContent: "flex-start", gap: 8 }]}>
         {[
           { id: 'QR', icon: QrCode, label: 'QR', color: '#ff6b6b' },
           { id: 'Materials', icon: BookOpen, label: 'Materials', color: '#5f27cd' },
           { id: 'Tasks', icon: ClipboardList, label: 'Tasks', color: '#1dd1a1' },
+          { id: 'Quizzes', icon: ClipboardCheck, label: 'Exams', color: '#ff9f43' },
           { id: 'Workspaces', icon: Users, label: 'Chats', color: '#0abde3' },
           { id: 'Account', icon: UserIcon, label: 'Account', color: BRAND.primary },
         ].map((item) => (
@@ -464,8 +466,8 @@ const styles = StyleSheet.create({
   emptyContainer: { alignItems: "center", marginTop: 20 },
   emptyText: { marginTop: -10, fontSize: 16, color: BRAND.textMuted, fontWeight: "600" },
 
-  actionCardsRow: { flexDirection: "row", justifyContent: "space-between", marginBottom: 24 },
-  actionCard: { alignItems: "center", width: "19%" },
+  actionCardsRow: { flexDirection: "row", marginBottom: 24 },
+  actionCard: { alignItems: "center", width: "30%", marginBottom: 12 },
   actionIconContainer: { width: 56, height: 56, borderRadius: 18, justifyContent: "center", alignItems: "center", marginBottom: 8 },
   actionLabel: { fontSize: 12, fontWeight: "700", color: BRAND.textMuted },
 

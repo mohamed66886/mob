@@ -16,6 +16,7 @@ import { CameraView, useCameraPermissions } from "expo-camera";
 import { usePreventScreenCapture } from "expo-screen-capture";
 import QRCode from "react-native-qrcode-svg";
 import LottieView from "lottie-react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 // Ensure your import paths are correct
 import { api } from "../lib/api";
@@ -46,6 +47,19 @@ function authHeaders(token: string) {
   return { headers: { Authorization: `Bearer ${token}` } };
 }
 
+async function getDeviceFingerprint(): Promise<string> {
+  try {
+    let fp = await AsyncStorage.getItem("device_fingerprint");
+    if (!fp) {
+      fp = "fp_" + Date.now().toString(36) + "_" + Math.random().toString(36).substring(2, 10);
+      await AsyncStorage.setItem("device_fingerprint", fp);
+    }
+    return fp;
+  } catch {
+    return "unknown_device_fp";
+  }
+}
+
 // Professional camera frame overlay
 const ScannerOverlay = () => (
   <View style={styles.scannerOverlay}>
@@ -65,7 +79,8 @@ export default function UnifiedQrNativeScreen({ token, user }: { token: string; 
 
   const role = user?.role;
   const isStudent = role === "student";
-  const canScan = role === "doctor" || role === "assistant";
+  const canScan = isStudent; // Student is now the scanner
+  const canGenerate = role === "doctor" || role === "assistant"; // Doctor/Assistant is now the generator
   const isAdmin = ["super_admin", "college_admin", "university_admin"].includes(role);
 
   const [isLoading, setIsLoading] = useState(true);
@@ -99,9 +114,9 @@ export default function UnifiedQrNativeScreen({ token, user }: { token: string; 
     extrapolate: "clamp",
   });
 
-  // QR Pulse Effect
+  // QR Pulse Effect (Now for those who generate)
   useEffect(() => {
-    if (isStudent) {
+    if (canGenerate) {
       Animated.loop(
         Animated.sequence([
           Animated.timing(pulseAnim, { toValue: 1.05, duration: 1500, useNativeDriver: true }),
@@ -109,11 +124,11 @@ export default function UnifiedQrNativeScreen({ token, user }: { token: string; 
         ])
       ).start();
     }
-  }, [isStudent]);
+  }, [canGenerate]);
 
   // Data Fetching & Timers
   useEffect(() => {
-    const interval = setInterval(() => setQrTs(Date.now()), 30000);
+    const interval = setInterval(() => setQrTs(Date.now()), 5000); // 5 seconds refresh rate
     return () => clearInterval(interval);
   }, []);
 
@@ -134,7 +149,7 @@ export default function UnifiedQrNativeScreen({ token, user }: { token: string; 
   }, [isStudent, token]);
 
   useEffect(() => {
-    if (!selectedSubjectId || isStudent || role === "assistant") {
+    if (!selectedSubjectId || isStudent) {
       setStudents([]);
       return;
     }
@@ -156,35 +171,49 @@ export default function UnifiedQrNativeScreen({ token, user }: { token: string; 
 
     try {
       const parsedData = JSON.parse(data);
-      if (!parsedData.studentId || !parsedData.ts) throw new Error("Invalid QR");
+      if (!parsedData.doctorId || !parsedData.ts || !parsedData.subjectId) throw new Error("Invalid QR");
 
-      if (Math.abs(Date.now() - parsedData.ts) > 35000) {
-        Alert.alert("Expired", "This QR code has expired. Ask the student to refresh it.");
+      if (parsedData.subjectId !== selectedSubjectId) {
+        Alert.alert("Wrong Subject", "This QR code is for a different subject.");
         setTimeout(() => setScanLock(false), 2000);
         return;
       }
 
-      const endpoint = role === "assistant" ? "/assistants/scan" : "/attendance/scan";
+      // Check if it's expired (> 10 seconds to allow for camera focus and network delay)
+      if (Math.abs(Date.now() - parsedData.ts) > 10000) {
+        Alert.alert("Expired", "This QR code has expired. Please scan the newly generated one.");
+        setTimeout(() => setScanLock(false), 2000);
+        return;
+      }
+
+      // Enhance with anti-cheat fingerprinting
+      const deviceFingerprint = await getDeviceFingerprint();
+      const deviceInfo = {
+        userAgent: `AttendQR Mobile / ${Platform.OS} ${Platform.Version || "Unknown"}`,
+        screenWidth: width,
+        screenHeight: Dimensions.get("window").height,
+        platform: Platform.OS,
+        language: "en",
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      };
+
+      // Hit an endpoint for student check-in
+      const endpoint = "/attendance/scan"; 
       const res = await api.post(endpoint, {
-        studentId: parsedData.studentId,
-        subjectId: selectedSubjectId,
+        subjectId: parsedData.subjectId,
+        doctorId: parsedData.doctorId,
         ts: parsedData.ts,
+        deviceFingerprint,
+        deviceInfo,
       }, authHeaders(token));
 
-      setScanLog((prev) => [
-        {
-          id: `${Date.now()}-${parsedData.studentId}`,
-          student: res.data.student,
-          code: res.data.academic_code,
-          status: res.data.status,
-        },
-        ...prev,
-      ]);
+      Alert.alert("Success", "Attendance recorded successfully!");
+      setIsScanning(false);
       
       // Haptic feedback could be added here
       setTimeout(() => setScanLock(false), 1200);
     } catch (error) {
-      Alert.alert("Error", "Invalid QR code or student already recorded.");
+      Alert.alert("Error", "Failed to record attendance or already recorded.");
       setTimeout(() => setScanLock(false), 2000);
     }
   };
@@ -223,8 +252,8 @@ export default function UnifiedQrNativeScreen({ token, user }: { token: string; 
         </Animated.ScrollView>
       </View>
 
-      {/* Student QR */}
-      {isStudent && (
+      {/* Doctor QR */}
+      {canGenerate && (
         !selectedSubjectId ? (
           <View style={styles.emptyContainer}>
             <Text style={styles.emptyText}>No available subjects to generate a QR</Text>
@@ -233,16 +262,16 @@ export default function UnifiedQrNativeScreen({ token, user }: { token: string; 
           <View style={styles.qrHeroSection}>
             <Animated.View style={[styles.qrWrapper, styles.cardShadow, { transform: [{ scale: pulseAnim }] }]}>
               <QRCode
-                value={JSON.stringify({ studentId: user.id, subjectId: selectedSubjectId, ts: qrTs })}
+                value={JSON.stringify({ doctorId: user.id, subjectId: selectedSubjectId, ts: qrTs })}
                 size={width * 0.55}
                 color={BRAND.text}
                 backgroundColor={BRAND.surface}
               />
             </Animated.View>
-            <Text style={styles.qrTitle}>Attendance Pass</Text>
+            <Text style={styles.qrTitle}>Attendance QR</Text>
             <View style={styles.refreshIndicator}>
               <ActivityIndicator size="small" color={BRAND.primary} />
-              <Text style={styles.qrSubtitle}>Auto-refreshing for your security</Text>
+              <Text style={styles.qrSubtitle}>Refreshing every 5 seconds</Text>
             </View>
           </View>
         )
@@ -259,14 +288,14 @@ export default function UnifiedQrNativeScreen({ token, user }: { token: string; 
                 </View>
                 <View style={styles.listRowContent}>
                   <Text style={styles.listTitle}>Open Scanner</Text>
-                  <Text style={styles.listSubtitle}>Tap to start attendance scanning</Text>
+                  <Text style={styles.listSubtitle}>Tap to scan the instructor's QR</Text>
                 </View>
               </Pressable>
             </View>
           ) : (
             <View style={[styles.scannerWrapper, styles.cardShadow]}>
               <View style={styles.scannerHeader}>
-                <Text style={styles.scannerTitle}>Point the camera at the student's QR code</Text>
+                <Text style={styles.scannerTitle}>Point camera at the instructor's QR code</Text>
                 <Pressable onPress={() => setIsScanning(false)} style={styles.closeScannerBtn}>
                   <X color={BRAND.text} size={20} />
                 </Pressable>
@@ -289,31 +318,12 @@ export default function UnifiedQrNativeScreen({ token, user }: { token: string; 
             </View>
           )}
 
-          {/* Scan Log (Recent Scans) */}
-          {scanLog.length > 0 && (
-            <View style={{ marginTop: 20 }}>
-              <Text style={styles.sectionTitle}>Recent Scans</Text>
-              <View style={[styles.listGroup, styles.cardShadow]}>
-                {scanLog.slice(0, 3).map((log, index) => (
-                  <View key={log.id} style={[styles.listRow, index === 2 && styles.noBorder]}>
-                    <View style={[styles.avatar, { backgroundColor: getAvatarColor(log.student) }]}>
-                      <Text style={styles.avatarText}>{log.student?.charAt(0).toUpperCase() || "S"}</Text>
-                    </View>
-                    <View style={styles.listRowContent}>
-                      <Text style={styles.listTitle} numberOfLines={1}>{log.student}</Text>
-                      <Text style={styles.listSubtitle}>{log.code}</Text>
-                    </View>
-                    <CheckCircle2 color={BRAND.success} size={24} />
-                  </View>
-                ))}
-              </View>
-            </View>
-          )}
+          {/* Scan Log - Optionally kept for doctors but currently disabled since student scans */}
         </View>
       )}
 
       {/* List Title for Students */}
-      {(isAdmin || canScan) && students.length > 0 && (
+      {(isAdmin || canGenerate) && students.length > 0 && (
         <Text style={[styles.sectionTitle, { marginTop: 24 }]}>
           Enrolled Students ({students.length})
         </Text>
@@ -340,7 +350,7 @@ export default function UnifiedQrNativeScreen({ token, user }: { token: string; 
 
       {/* High Performance FlatList */}
       <Animated.FlatList
-        data={(isAdmin || canScan) ? students : []}
+        data={(isAdmin || canGenerate) ? students : []}
         keyExtractor={(item, index) => item.id?.toString() || index.toString()}
         contentContainerStyle={[styles.scrollContent, { paddingTop: HEADER_MAX_HEIGHT }]}
         showsVerticalScrollIndicator={false}

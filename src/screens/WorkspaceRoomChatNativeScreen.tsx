@@ -268,18 +268,28 @@ export default function RoomChatNativeScreen({
       if (Number(message?.room_id) !== numericRoomId) return;
 
       setMessages((prev) => {
-        // Avoid duplicates from optimistic UI
-        if (message.client_temp_id && prev.some(m => m.client_temp_id === message.client_temp_id)) {
-          return prev.map((m) => {
-            if (m.client_temp_id !== message.client_temp_id) return m;
-            return {
-              ...message,
-              created_at: m.created_at || message.created_at,
-              local_status: "sent",
-            };
-          });
+        // Avoid duplicates from optimistic UI by matching client_temp_id or heuristically
+        const existingLocalIndex = prev.findIndex(m => 
+          (message.client_temp_id && m.client_temp_id === message.client_temp_id) ||
+          (m.local_status === "pending" && m.sender_id === message.sender_id && m.content === message.content && m.type === message.type) ||
+          (m.id === message.id)
+        );
+
+        if (existingLocalIndex !== -1) {
+          const m = prev[existingLocalIndex];
+          // If it's just an id match and not pending, we can just return prev to avoid overwrite
+          if (m.id === message.id && m.local_status !== "pending" && !m.client_temp_id) return prev;
+          
+          const newPrev = [...prev];
+          newPrev[existingLocalIndex] = {
+            ...message,
+            // Preserve the local optimistic timestamp to avoid backend timezone jumps!
+            created_at: m.created_at || message.created_at,
+            local_status: "sent",
+          };
+          return newPrev;
         }
-        if (prev.some(m => m.id === message.id)) return prev;
+
         return [...prev, message];
       });
 

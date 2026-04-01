@@ -226,6 +226,8 @@ type RootStackParamList = {
   WorkspaceRoomNative: { roomId: number; roomName?: string };
   WorkspaceRoomProfileNative: { roomId: number; roomName?: string };
   WorkspaceCallNative: { roomId: number; roomName?: string; callType: "voice" | "video"; callId?: number };
+  Quizzes: undefined;
+  QuizTaker: { quizId: number };
 };
 
 const RootStack = createNativeStackNavigator<RootStackParamList>();
@@ -2472,6 +2474,27 @@ export default function App() {
         </RootStack.Screen>
         <RootStack.Screen name="SubjectMaterialsNative" options={{ headerShown: false }}>
           {(props) => <SubjectMaterialsNativeScreen {...props} token={token} user={user} />}
+        </RootStack.Screen>
+
+        {/* Quizzes / Exams Module */}
+        <RootStack.Screen 
+          name="Quizzes" 
+          options={{ title: "Exams & Quizzes" }}
+        >
+          {() => {
+            const QuizzesNativeScreen = require("./src/screens/QuizzesNativeScreen").default;
+            return <QuizzesNativeScreen token={token} user={user} />;
+          }}
+        </RootStack.Screen>
+
+        <RootStack.Screen 
+          name="QuizTaker" 
+          options={{ title: "Take Exam", headerBackVisible: false, gestureEnabled: false }}
+        >
+          {(props) => {
+            const QuizTakerScreen = require("./src/screens/QuizTakerScreen").default;
+            return <QuizTakerScreen {...props} token={token} user={user} />;
+          }}
         </RootStack.Screen>
         <RootStack.Screen
           name="MaterialViewerNative"

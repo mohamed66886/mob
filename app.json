@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "mobile",
+    "name": "attendQr",
     "slug": "mobile",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -24,7 +24,7 @@
     },
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
+        "backgroundColor": "#1B3A5C",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
@@ -45,7 +45,18 @@
       "expo-secure-store",
       "expo-audio",
       "expo-notifications",
-      "expo-asset"
+      "expo-asset",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "enableProguardInReleaseBuilds": true,
+            "enableShrinkResourcesInReleaseBuilds": true,
+            "useLegacyPackaging": false,
+            "extraProguardRules": "-keep class expo.modules.** { *; }\n-dontwarn expo.modules.**\n-keep class com.facebook.** { *; }\n-dontwarn com.facebook.**\n-keep class org.webrtc.** { *; }\n-dontwarn org.webrtc.**\n-keep class com.airbnb.lottie.** { *; }\n-dontwarn com.airbnb.lottie.**\n-keep class com.swmansion.reanimated.** { *; }\n-dontwarn com.swmansion.reanimated.**"
+          }
+        }
+      ]
     ],
     "extra": {
       "eas": {
