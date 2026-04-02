@@ -13,6 +13,7 @@ import { useFocusEffect } from "@react-navigation/native";
 import { Ionicons } from "@expo/vector-icons";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useFonts } from "expo-font";
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
@@ -233,6 +234,8 @@ export default function MainTabsNavigator({
   primaryColor = "#3390ec",
 }: MainTabsNavigatorProps) {
   const insets = useSafeAreaInsets();
+  const [iconsLoaded] = useFonts(Ionicons.font);
+  const useSimpleAndroidTabBar = Platform.OS === "android" && !__DEV__;
   
   const [pendingTasksCount, setPendingTasksCount] = useState(0); 
   const [unreadMessagesCount, setUnreadMessagesCount] = useState(0);
@@ -304,12 +307,31 @@ export default function MainTabsNavigator({
 
 
 
+  if (!iconsLoaded) {
+    return (
+      <View style={styles.loadingWrap}>
+        <ActivityIndicator size="large" color={primaryColor} />
+      </View>
+    );
+  }
+
   return (
     <Tabs.Navigator
-      tabBar={(props) => <CustomTabBar {...props} primaryColor={primaryColor} insets={insets} />}
+      tabBar={
+        useSimpleAndroidTabBar
+          ? undefined
+          : (props) => <CustomTabBar {...props} primaryColor={primaryColor} insets={insets} />
+      }
       screenOptions={({ route }) => ({
         headerShown: false,
         unmountOnBlur: true,
+        tabBarHideOnKeyboard: true,
+        tabBarStyle: useSimpleAndroidTabBar
+          ? {
+              backgroundColor: "#ffffff",
+              borderTopColor: "#e5e7eb",
+            }
+          : undefined,
         tabBarLabel: TAB_LABELS[route.name],
         tabBarBadge:
           route.name === "Tasks" && pendingTasksCount > 0
@@ -338,6 +360,12 @@ export default function MainTabsNavigator({
 // 4. Styles
 // ---------------------------------------------------------
 const styles = StyleSheet.create({
+  loadingWrap: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#ffffff",
+  },
   tabWrapper: {
     flexDirection: "row",
     height: 72,

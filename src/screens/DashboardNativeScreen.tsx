@@ -29,14 +29,11 @@ import Animated, {
   SharedValue,
 } from "react-native-reanimated";
 import { useNavigation } from "@react-navigation/native";
-let LottieView: any;
-if (Platform.OS !== "web") {
-  LottieView = require("lottie-react-native").default;
-}
 import * as Haptics from "expo-haptics";
 
 import { api, resolveMediaUrl } from "../lib/api";
 import { User, UserRole } from "../types/auth";
+import LottieView from "../components/AppLottieView";
 import {
   BookMarked,
   TrendingUp,
@@ -218,7 +215,7 @@ function StudentDashboard({ token, onOpenScreen }: any) {
   if (loading) {
     return (
       <View style={styles.loadingContainer}>
-        {Platform.OS !== "web" && LottieView ? (
+        {Platform.OS !== "web" ? (
           <LottieView source={{ uri: "https://lottie.host/1ad3af53-f54a-486a-bcf7-9aea0a0f697c/yF4Hsho8pN.json" }} autoPlay loop style={{ width: 140, height: 140 }} />
         ) : (
           <ActivityIndicator size="large" color={BRAND.primary} />
@@ -276,7 +273,7 @@ function StudentDashboard({ token, onOpenScreen }: any) {
       
       {subjects.length === 0 ? (
         <Animated.View entering={FadeIn.delay(500)} style={styles.emptyContainer}>
-          {Platform.OS !== "web" && LottieView ? (
+          {Platform.OS !== "web" ? (
             <LottieView source={{ uri: "https://lottie.host/1ad3af53-f54a-486a-bcf7-9aea0a0f697c/yF4Hsho8pN.json" }} autoPlay loop style={{ width: 180, height: 180 }} />
           ) : (
             <ActivityIndicator size="large" color={BRAND.primary} />

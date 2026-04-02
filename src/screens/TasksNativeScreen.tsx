@@ -7,6 +7,7 @@ import {
   Pressable,
   TextInput,
   Alert,
+  Linking,
   ScrollView,
   Modal,
   KeyboardAvoidingView,
@@ -14,6 +15,7 @@ import {
   AppState,
   AppStateStatus,
 } from "react-native";
+import { WebView } from "react-native-webview";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
 import * as DocumentPicker from "expo-document-picker";
@@ -29,7 +31,7 @@ import Animated, {
   withTiming,
 } from "react-native-reanimated";
 
-import { api } from "../lib/api";
+import { api, resolveMediaUrl } from "../lib/api";
 import { User } from "../types/auth";
 import {
   FileText,
@@ -64,6 +66,38 @@ const getSubjectColor = (name: string) => {
   return colors[charCode % colors.length];
 };
 
+// Server dates may arrive as:
+// - ISO strings with timezone (e.g. 2026-04-01T10:00:00.000Z)
+// - MySQL-ish strings without timezone (e.g. 2026-04-01 10:00:00)
+// iOS/Android can parse the latter inconsistently, so normalize it.
+function parseServerDateTime(value: unknown): Date | null {
+  if (!value) return null;
+
+  if (value instanceof Date) {
+    return Number.isFinite(value.getTime()) ? value : null;
+  }
+
+  const normalized = String(value).trim();
+  if (!normalized) return null;
+
+  let isoLike = normalized;
+  if (!isoLike.includes("T") && isoLike.includes(" ")) {
+    isoLike = isoLike.replace(" ", "T");
+  }
+
+  // Some endpoints may accidentally serialize MySQL DATETIME as ISO UTC (trailing 'Z').
+  // In this app, task windows are intended to be Egypt-local times, so treat that as local.
+  // (Keep explicit numeric offsets like +02:00 if present.)
+  if (/Z$/i.test(isoLike) && !/[+\-]\d{2}:?\d{2}$/i.test(isoLike)) {
+    isoLike = isoLike.replace(/Z$/i, "");
+  }
+
+  // Important: when the server doesn't include timezone info (common with MySQL DATETIME),
+  // we treat the value as *local time* (do NOT append "Z"), to avoid hour shifts.
+  const dt = new Date(isoLike);
+  return Number.isFinite(dt.getTime()) ? dt : null;
+}
+
 function authHeaders(token: string) {
   return { headers: { Authorization: `Bearer ${token}` } };
 }
@@ -85,51 +119,83 @@ const SkeletonTaskRow = () => {
 
 // --- Performance: Memoized Animated Task Item ---
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
-const TaskItem = React.memo(({ item, index, canSubmit, onPress }: any) => {
+const TaskItem = React.memo(({ item, index, canSubmit, onOpenDetails, onOpenSubmit }: any) => {
   const scale = useSharedValue(1);
   const isSubmitted = !!item.my_submission_id;
 
-  const formatDateTime = (dateString: string) => {
-    return new Date(dateString).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  const getSubmitWindow = () => {
+    const now = Date.now();
+    const startMs = item?.start_date ? (parseServerDateTime(item.start_date)?.getTime() ?? null) : null;
+    const dueMs = parseServerDateTime(item.due_date)?.getTime() ?? NaN;
+
+    if (!Number.isFinite(dueMs)) {
+      return { canSubmitNow: false, reason: "Invalid deadline" as const };
+    }
+
+    if (startMs && Number.isFinite(startMs) && now < startMs) {
+      return { canSubmitNow: false, reason: "Submission has not started yet" as const };
+    }
+
+    if (now > dueMs) {
+      return { canSubmitNow: false, reason: "Deadline has passed" as const };
+    }
+
+    return { canSubmitNow: true, reason: null };
   };
+
+  const windowStatus = getSubmitWindow();
+  const canOpenSubmit = canSubmit && !isSubmitted && windowStatus.canSubmitNow;
 
   return (
     <Animated.View entering={FadeInDown.delay(index * 40).springify().damping(14)}>
-      <AnimatedPressable
-        onPressIn={() => (scale.value = withSpring(0.97))}
-        onPressOut={() => (scale.value = withSpring(1))}
-        onPress={() => {
-          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-          if (canSubmit && !isSubmitted) onPress(item.id);
-        }}
-        style={[{ transform: [{ scale }] }, styles.taskRow]}
-      >
-        <View style={[styles.taskIconBox, { backgroundColor: getSubjectColor(item.subject_name || "") }]}>
-          <FileText color="white" size={24} strokeWidth={2.5} />
-        </View>
+      <Animated.View style={[{ transform: [{ scale }] }, styles.taskRow]}>
+        <Pressable
+          onPressIn={() => (scale.value = withSpring(0.97))}
+          onPressOut={() => (scale.value = withSpring(1))}
+          onPress={() => {
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            onOpenDetails(item.id);
+          }}
+          style={styles.taskMain}
+        >
+          <View style={[styles.taskIconBox, { backgroundColor: getSubjectColor(item.subject_name || "") }]}>
+            <FileText color="white" size={24} strokeWidth={2.5} />
+          </View>
 
-        <View style={styles.taskContent}>
-          <Text style={styles.taskTitle} numberOfLines={1}>{item.title}</Text>
-          <Text style={styles.taskSubtitle} numberOfLines={1}>
-            {item.subject_name || "Unknown"} • Due: {formatDateTime(item.due_date)}
-          </Text>
-        </View>
+          <View style={styles.taskContent}>
+            <Text style={styles.taskTitle} numberOfLines={1}>{item.title}</Text>
+          </View>
+        </Pressable>
 
         <View style={styles.taskAction}>
           {canSubmit ? (
             isSubmitted ? (
-              <CheckCircle2 color={BRAND.success} size={26} strokeWidth={2.5} />
-            ) : (
-              <View style={styles.uploadBadge}>
-                <UploadCloud color={BRAND.primary} size={16} strokeWidth={2.5} />
-                <Text style={styles.uploadBadgeText}>Submit</Text>
+              <View style={[styles.uploadBadge, { backgroundColor: BRAND.success + "15" }]}>
+                <CheckCircle2 color={BRAND.success} size={16} strokeWidth={2.5} />
+                <Text style={[styles.uploadBadgeText, { color: BRAND.success }]}>Submitted</Text>
               </View>
+            ) : (
+              <Pressable
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  if (canOpenSubmit) onOpenSubmit(item.id);
+                  else Alert.alert("Submission closed", windowStatus.reason || "Submission is not allowed right now");
+                }}
+                style={({ pressed }) => [
+                  styles.uploadBadge,
+                  !windowStatus.canSubmitNow && { backgroundColor: BRAND.border },
+                  pressed && { opacity: 0.9 },
+                ]}
+              >
+                <UploadCloud color={windowStatus.canSubmitNow ? BRAND.primary : BRAND.textMuted} size={16} strokeWidth={2.5} />
+                <Text style={[styles.uploadBadgeText, !windowStatus.canSubmitNow && { color: BRAND.textMuted }]}>Submit</Text>
+              </Pressable>
             )
           ) : (
             <ChevronRight color={BRAND.border} size={24} strokeWidth={2.5} />
           )}
         </View>
-      </AnimatedPressable>
+      </Animated.View>
     </Animated.View>
   );
 });
@@ -140,8 +206,13 @@ export default function TasksNativeScreen({ token, user }: { token: string; user
   const [subjects, setSubjects] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
+  const [isFileViewerVisible, setFileViewerVisible] = useState(false);
+  const [fileViewerUrl, setFileViewerUrl] = useState<string | null>(null);
+  const [fileViewerLoading, setFileViewerLoading] = useState(false);
+
   const [isCreateModalVisible, setCreateModalVisible] = useState(false);
   const [isSubmitModalVisible, setSubmitModalVisible] = useState(false);
+  const [isDetailsModalVisible, setDetailsModalVisible] = useState(false);
 
   const [creatingTask, setCreatingTask] = useState(false);
   const [createForm, setCreateForm] = useState({ subject_id: "", title: "", description: "", due_date: "", max_grade: "100" });
@@ -151,6 +222,8 @@ export default function TasksNativeScreen({ token, user }: { token: string; user
   const [uploadNotes, setUploadNotes] = useState("");
   const [uploadingSubmission, setUploadingSubmission] = useState(false);
 
+  const [detailsTaskId, setDetailsTaskId] = useState<number | null>(null);
+
   const canCreate = user?.role === "doctor";
   const canSubmit = user?.role === "student";
   const autoRefreshTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -158,6 +231,36 @@ export default function TasksNativeScreen({ token, user }: { token: string; user
   const appStateRef = useRef<AppStateStatus>(AppState.currentState);
 
   const selectedUploadTask = useMemo(() => tasks.find((t) => t.id === uploadTaskId) || null, [tasks, uploadTaskId]);
+  const selectedDetailsTask = useMemo(() => tasks.find((t) => t.id === detailsTaskId) || null, [tasks, detailsTaskId]);
+
+  const openTaskAttachment = useCallback(async (task: any) => {
+    const url = resolveMediaUrl(task?.attachment_url);
+    if (!url) {
+      Alert.alert("No file", "This task has no attachment");
+      return;
+    }
+
+    // In-app viewer (requested): show the file inside the app instead of launching the browser.
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setFileViewerUrl(url);
+    setFileViewerVisible(true);
+  }, []);
+
+  const getSubmitWindow = useCallback((task: any) => {
+    const now = Date.now();
+    const startMs = task?.start_date ? (parseServerDateTime(task.start_date)?.getTime() ?? null) : null;
+    const dueMs = parseServerDateTime(task?.due_date)?.getTime() ?? NaN;
+
+    if (!Number.isFinite(dueMs)) return { canSubmitNow: false, reason: "Invalid deadline" };
+    if (startMs && Number.isFinite(startMs) && now < startMs) return { canSubmitNow: false, reason: "Submission has not started yet" };
+    if (now > dueMs) return { canSubmitNow: false, reason: "Deadline has passed" };
+    return { canSubmitNow: true, reason: null };
+  }, []);
+
+  const detailsWindowStatus = useMemo(() => {
+    if (!selectedDetailsTask) return { canSubmitNow: false, reason: null as string | null };
+    return getSubmitWindow(selectedDetailsTask);
+  }, [getSubmitWindow, selectedDetailsTask]);
 
   const fetchData = useCallback(async (options?: { silent?: boolean; showError?: boolean }) => {
     const silent = Boolean(options?.silent);
@@ -230,12 +333,42 @@ export default function TasksNativeScreen({ token, user }: { token: string; user
   };
 
   const openSubmitModal = (taskId: number) => {
+    const task = tasks.find((t) => t.id === taskId);
+    const windowStatus = getSubmitWindow(task);
+    if (!windowStatus.canSubmitNow) {
+      Alert.alert("Submission closed", windowStatus.reason || "Submission is not allowed right now");
+      return;
+    }
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     setUploadTaskId(taskId); setUploadFile(null); setUploadNotes(""); setSubmitModalVisible(true);
   };
 
+  const openDetailsModal = (taskId: number) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    setDetailsTaskId(taskId);
+    setDetailsModalVisible(true);
+  };
+
+  const formatDateTime = (dateString?: string | null) => {
+    if (!dateString) return "—";
+    const dt = parseServerDateTime(dateString);
+    if (!dt) return "—";
+    return dt.toLocaleString("en-US", {
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  };
+
   const handleUploadSubmission = async () => {
     if (!uploadTaskId || !uploadFile) return Alert.alert("Validation", "Please choose a submission file");
+
+    const windowStatus = getSubmitWindow(selectedUploadTask);
+    if (!windowStatus.canSubmitNow) {
+      return Alert.alert("Submission closed", windowStatus.reason || "Submission is not allowed right now");
+    }
+
     setUploadingSubmission(true);
     try {
       const formData = new FormData();
@@ -270,7 +403,15 @@ export default function TasksNativeScreen({ token, user }: { token: string; user
       <Animated.FlatList
         data={loading ? Array.from({ length: 5 }) : tasks}
         keyExtractor={(_, idx) => loading ? `skel-${idx}` : tasks[idx].id.toString()}
-        renderItem={loading ? () => <SkeletonTaskRow /> : ({ item, index }) => <TaskItem item={item} index={index} canSubmit={canSubmit} onPress={openSubmitModal} />}
+        renderItem={loading ? () => <SkeletonTaskRow /> : ({ item, index }) => (
+          <TaskItem
+            item={item}
+            index={index}
+            canSubmit={canSubmit}
+            onOpenDetails={openDetailsModal}
+            onOpenSubmit={openSubmitModal}
+          />
+        )}
         contentContainerStyle={styles.listContent}
         showsVerticalScrollIndicator={false}
         ListEmptyComponent={
@@ -282,6 +423,107 @@ export default function TasksNativeScreen({ token, user }: { token: string; user
           )
         }
       />
+
+      {/* TASK DETAILS MODAL */}
+      <Modal
+        visible={isDetailsModalVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setDetailsModalVisible(false)}
+      >
+        <KeyboardAvoidingView
+          style={styles.modalOverlay}
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+        >
+          <Pressable
+            style={styles.modalBackdrop}
+            onPress={() => setDetailsModalVisible(false)}
+          />
+          <View style={[styles.modalContent, { paddingBottom: insets.bottom || 20, maxHeight: "85%" }]}>
+            <View style={styles.modalHandleContainer}><View style={styles.modalHandle} /></View>
+
+            <View style={styles.modalHeader}>
+              <View style={{ flex: 1, paddingRight: 16 }}>
+                <Text style={styles.modalTitle} numberOfLines={1}>
+                  {selectedDetailsTask?.title || "Task Details"}
+                </Text>
+                <Text style={styles.modalSubtitle} numberOfLines={1}>
+                  {selectedDetailsTask?.subject_name || "Unknown subject"}
+                </Text>
+              </View>
+              <Pressable onPress={() => setDetailsModalVisible(false)} style={styles.closeBtn}>
+                <X color={BRAND.textMuted} size={22} strokeWidth={2.5} />
+              </Pressable>
+            </View>
+
+            <ScrollView style={styles.modalBody} showsVerticalScrollIndicator={false}>
+              <View style={styles.detailsCard}>
+                <View style={styles.detailsRow}>
+                  <Text style={styles.detailsLabel}>Start</Text>
+                  <Text style={styles.detailsValue}>{formatDateTime(selectedDetailsTask?.start_date)}</Text>
+                </View>
+                <View style={styles.detailsRow}>
+                  <Text style={styles.detailsLabel}>Deadline</Text>
+                  <Text style={styles.detailsValue}>{formatDateTime(selectedDetailsTask?.due_date)}</Text>
+                </View>
+                <View style={[styles.detailsRow, { alignItems: "flex-start" }]}>
+                  <Text style={styles.detailsLabel}>Description</Text>
+                  <Text style={styles.detailsValue}>
+                    {selectedDetailsTask?.description?.trim() ? selectedDetailsTask.description : "—"}
+                  </Text>
+                </View>
+              </View>
+
+              {!!selectedDetailsTask?.attachment_url && (
+                <Pressable
+                  onPress={() => openTaskAttachment(selectedDetailsTask)}
+                  style={({ pressed }) => [styles.taskFileButton, pressed && { opacity: 0.9 }]}
+                >
+                  <FileText color={BRAND.primary} size={20} strokeWidth={2.5} />
+                  <Text style={styles.taskFileButtonText}>View task file</Text>
+                </Pressable>
+              )}
+
+              {canSubmit && (
+                <Pressable
+                  onPress={() => {
+                    if (!selectedDetailsTask?.id) return;
+                    if (selectedDetailsTask?.my_submission_id) return;
+                    if (!detailsWindowStatus.canSubmitNow) {
+                      Alert.alert(
+                        "Submission closed",
+                        detailsWindowStatus.reason || "Submission is not allowed right now",
+                      );
+                      return;
+                    }
+                    setDetailsModalVisible(false);
+                    openSubmitModal(selectedDetailsTask.id);
+                  }}
+                  disabled={
+                    Boolean(selectedDetailsTask?.my_submission_id) ||
+                    !detailsWindowStatus.canSubmitNow
+                  }
+                  style={({ pressed }) => [
+                    styles.modalActionBtn,
+                    (Boolean(selectedDetailsTask?.my_submission_id) ||
+                      !detailsWindowStatus.canSubmitNow) && { opacity: 0.6 },
+                    pressed && { opacity: 0.9 },
+                  ]}
+                >
+                  <UploadCloud color="white" size={20} strokeWidth={2.5} />
+                  <Text style={styles.modalActionBtnText}>
+                    {selectedDetailsTask?.my_submission_id
+                      ? "Submitted"
+                      : detailsWindowStatus.canSubmitNow
+                        ? "Submit"
+                        : "Closed"}
+                  </Text>
+                </Pressable>
+              )}
+            </ScrollView>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
 
       {/* FAB with Animation */}
       {canCreate && (
@@ -377,6 +619,16 @@ export default function TasksNativeScreen({ token, user }: { token: string; user
             </View>
 
             <View style={styles.modalBody}>
+              {!!selectedUploadTask?.attachment_url && (
+                <Pressable
+                  onPress={() => openTaskAttachment(selectedUploadTask)}
+                  style={({ pressed }) => [styles.taskFileButton, pressed && { opacity: 0.9 }]}
+                >
+                  <FileText color={BRAND.primary} size={20} strokeWidth={2.5} />
+                  <Text style={styles.taskFileButtonText}>View task file</Text>
+                </Pressable>
+              )}
+
               <Pressable style={[styles.filePicker, uploadFile && styles.filePickerActive]} onPress={handlePickFile}>
                 <UploadCloud color={uploadFile ? BRAND.primary : BRAND.textMuted} size={40} strokeWidth={1.5} />
                 <Text style={[styles.filePickerText, uploadFile && { color: BRAND.primary, fontWeight: "700" }]}>
@@ -400,6 +652,68 @@ export default function TasksNativeScreen({ token, user }: { token: string; user
         </KeyboardAvoidingView>
       </Modal>
 
+      {/* IN-APP FILE VIEWER (keep last so it appears above other modals) */}
+      <Modal
+        visible={isFileViewerVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => {
+          setFileViewerVisible(false);
+          setFileViewerUrl(null);
+        }}
+      >
+        <View style={[styles.modalOverlay, { justifyContent: "flex-end" }]}>
+          <Pressable
+            style={styles.modalBackdrop}
+            onPress={() => {
+              setFileViewerVisible(false);
+              setFileViewerUrl(null);
+            }}
+          />
+          <View style={[styles.modalContent, { paddingBottom: insets.bottom || 20, height: "85%" }]}>
+            <View style={styles.modalHandleContainer}><View style={styles.modalHandle} /></View>
+
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>File</Text>
+              <Pressable
+                onPress={() => {
+                  setFileViewerVisible(false);
+                  setFileViewerUrl(null);
+                }}
+                style={styles.closeBtn}
+              >
+                <X color={BRAND.textMuted} size={22} strokeWidth={2.5} />
+              </Pressable>
+            </View>
+
+            <View style={{ flex: 1, paddingHorizontal: 12, paddingBottom: 12 }}>
+              {!fileViewerUrl ? (
+                <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
+                  <Text style={{ color: BRAND.textMuted, fontWeight: "600" }}>No file</Text>
+                </View>
+              ) : (
+                <View style={{ flex: 1, borderRadius: 16, overflow: "hidden", borderWidth: 1, borderColor: BRAND.border }}>
+                  {fileViewerLoading && (
+                    <View style={{ position: "absolute", top: 16, right: 16, zIndex: 10 }}>
+                      <ActivityIndicator />
+                    </View>
+                  )}
+                  <WebView
+                    source={{ uri: fileViewerUrl }}
+                    onLoadStart={() => setFileViewerLoading(true)}
+                    onLoadEnd={() => setFileViewerLoading(false)}
+                    onError={() => {
+                      setFileViewerLoading(false);
+                      Alert.alert("Error", "Failed to load file");
+                    }}
+                  />
+                </View>
+              )}
+            </View>
+          </View>
+        </View>
+      </Modal>
+
     </View>
   );
 }
@@ -412,14 +726,15 @@ const styles = StyleSheet.create({
   listContent: { paddingTop: 16, paddingBottom: 120, paddingHorizontal: 16 },
 
   taskRow: { flexDirection: "row", alignItems: "center", paddingVertical: 14, paddingHorizontal: 16, backgroundColor: BRAND.surface, borderRadius: 16, marginBottom: 12, shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.03, shadowRadius: 3, elevation: 1 },
+  taskMain: { flex: 1, flexDirection: "row", alignItems: "center" },
   taskIconBox: { width: 52, height: 52, borderRadius: 16, justifyContent: "center", alignItems: "center", marginRight: 14 },
   taskContent: { flex: 1, justifyContent: "center" },
   taskTitle: { fontSize: 17, fontWeight: "700", color: BRAND.text, marginBottom: 4, letterSpacing: -0.3 },
-  taskSubtitle: { fontSize: 13, color: BRAND.textMuted, fontWeight: "500" },
   taskAction: { marginLeft: 12, justifyContent: "center", alignItems: "center" },
   
   uploadBadge: { flexDirection: "row", alignItems: "center", backgroundColor: BRAND.primary + "15", paddingHorizontal: 12, paddingVertical: 8, borderRadius: 12, gap: 6 },
   uploadBadgeText: { color: BRAND.primary, fontSize: 13, fontWeight: "700" },
+
 
   emptyState: { paddingVertical: 100, alignItems: "center", justifyContent: "center" },
   emptyText: { color: BRAND.text, marginTop: 16, fontSize: 18, fontWeight: "700" },
@@ -437,6 +752,14 @@ const styles = StyleSheet.create({
   closeBtn: { backgroundColor: BRAND.background, padding: 6, borderRadius: 20 },
   
   modalBody: { paddingHorizontal: 20 },
+
+  taskFileButton: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10, backgroundColor: BRAND.primary + "10", borderWidth: 1, borderColor: BRAND.primary + "25", borderRadius: 16, paddingVertical: 14, paddingHorizontal: 16, marginTop: 12 },
+  taskFileButtonText: { color: BRAND.primary, fontSize: 15, fontWeight: "800" },
+
+  detailsCard: { backgroundColor: BRAND.background, borderRadius: 16, borderWidth: 1, borderColor: BRAND.border, padding: 14, marginTop: 8 },
+  detailsRow: { flexDirection: "row", justifyContent: "space-between", gap: 12, paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: BRAND.border },
+  detailsLabel: { width: 90, color: BRAND.textMuted, fontSize: 13, fontWeight: "700" },
+  detailsValue: { flex: 1, color: BRAND.text, fontSize: 13, fontWeight: "600" },
   
   inputLabel: { fontSize: 14, fontWeight: "700", color: BRAND.text, marginBottom: 8, marginTop: 16 },
   input: { backgroundColor: BRAND.background, borderRadius: 14, paddingHorizontal: 16, paddingVertical: 14, fontSize: 16, color: BRAND.text, borderWidth: 1, borderColor: BRAND.border },

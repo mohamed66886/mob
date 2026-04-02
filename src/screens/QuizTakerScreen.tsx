@@ -7,6 +7,7 @@ import {
   ActivityIndicator,
   FlatList,
   Alert,
+  TextInput,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRoute, useNavigation } from "@react-navigation/native";
@@ -53,6 +54,9 @@ export default function QuizTakerScreen({
   
   const [quizDetails, setQuizDetails] = useState<any>(null);
   const [questions, setQuestions] = useState<Question[]>([]);
+
+  const [needsPassword, setNeedsPassword] = useState(false);
+  const [accessPassword, setAccessPassword] = useState("");
   
   const [status, setStatus] = useState<"pending" | "in_progress" | "submitted">("pending");
   const [startedAt, setStartedAt] = useState<Date | null>(null);
@@ -68,27 +72,33 @@ export default function QuizTakerScreen({
     return () => clearInterval(timerRef.current!);
   }, [quizId]);
 
+  const applyQuizPayload = (data: any) => {
+    setQuizDetails({
+      id: data.id,
+      title: data.title,
+      description: data.description,
+      time_limit_minutes: data.time_limit_minutes,
+    });
+
+    setQuestions((data.questions || []).map((q: any) => {
+      let parsedOpts = q.options;
+      if (typeof parsedOpts === "string") {
+        try { parsedOpts = JSON.parse(parsedOpts); } catch { parsedOpts = []; }
+      }
+      return {
+        ...q,
+        options: Array.isArray(parsedOpts) ? parsedOpts : []
+      };
+    }));
+  };
+
   const fetchQuizData = async () => {
     try {
       const res = await api.get(`/quizzes/${quizId}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
-      setQuizDetails({
-        id: res.data.id,
-        title: res.data.title,
-        description: res.data.description,
-        time_limit_minutes: res.data.time_limit_minutes,
-      });
-      setQuestions((res.data.questions || []).map((q: any) => {
-        let parsedOpts = q.options;
-        if (typeof parsedOpts === "string") {
-          try { parsedOpts = JSON.parse(parsedOpts); } catch (e) { parsedOpts = []; }
-        }
-        return {
-          ...q,
-          options: Array.isArray(parsedOpts) ? parsedOpts : []
-        };
-      }));
+      setNeedsPassword(false);
+      applyQuizPayload(res.data);
       
       // Let's check status. If hitting /subject returned in-progress, we don't know it here directly
       // unless we attempt to start or there's an endpoint to check. 
@@ -99,10 +109,29 @@ export default function QuizTakerScreen({
       // We will handle that by letting them click "Start", or if they reload the page, we can try to "peek"
       // the status. To peek without starting, we'll need a peek route, or we can just try "Starting"
       // and checking the error response.
-      startupCheck();
+      // NOTE: do not auto-hit /start here; starting should be explicit
 
     } catch (err: any) {
-      if (err?.response?.status === 403) {
+      const statusCode = err?.response?.status;
+      const errMsg = err?.response?.data?.error;
+
+      if (statusCode === 403 && errMsg === "Password required") {
+        setNeedsPassword(true);
+        setStatus("pending");
+        setStartedAt(null);
+        setQuestions([]);
+        setAccessPassword("");
+
+        const quiz = err?.response?.data?.quiz;
+        if (quiz) {
+          setQuizDetails({
+            id: quiz.id,
+            title: quiz.title,
+            description: quiz.description,
+            time_limit_minutes: quiz.time_limit_minutes,
+          });
+        }
+      } else if (statusCode === 403) {
         Alert.alert("Not Active", "This exam is not active right now.", [
           { text: "OK", onPress: () => navigation.goBack() }
         ]);
@@ -164,11 +193,20 @@ export default function QuizTakerScreen({
   }, [status, startedAt, quizDetails]);
 
   const handleStartQuiz = async () => {
+    if (needsPassword && !accessPassword.trim()) {
+      Alert.alert("Password Required", "Enter the exam password to start.");
+      return;
+    }
+
     setLoading(true);
     try {
-      const res = await api.post(`/quizzes/${quizId}/start`, {}, {
+      const res = await api.post(
+        `/quizzes/${quizId}/start`,
+        accessPassword.trim() ? { password: accessPassword.trim() } : {},
+        {
         headers: { Authorization: `Bearer ${token}` },
-      });
+        },
+      );
       
       if (res.data.finishedAt) {
         setStatus("submitted");
@@ -176,7 +214,21 @@ export default function QuizTakerScreen({
         setStatus("in_progress");
         setStartedAt(new Date(res.data.startedAt));
       }
+
+      setNeedsPassword(false);
+
+      // Load questions now that the quiz is unlocked/started
+      const quizRes = await api.get(`/quizzes/${quizId}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      applyQuizPayload(quizRes.data);
     } catch (err: any) {
+      const errMsg = err?.response?.data?.error;
+      if (err?.response?.status === 403 && (errMsg === "Password required" || errMsg === "Invalid password")) {
+        setNeedsPassword(true);
+        Alert.alert("Password", errMsg === "Invalid password" ? "Incorrect password." : "Password is required.");
+        return;
+      }
       if (err?.response?.data?.message === "Quiz already started") {
         setStatus("in_progress");
         // We'd need to fetch startedAt from somewhere if not returned. 
@@ -287,6 +339,21 @@ export default function QuizTakerScreen({
                   <AlertTriangle size={20} color={BRAND.danger} />
                   <Text style={[styles.infoText, { color: BRAND.danger }]}>Do not leave the app during the exam.</Text>
                </View>
+
+               {needsPassword && (
+                 <View style={styles.passwordBox}>
+                   <Text style={styles.passwordLabel}>Exam Password</Text>
+                   <TextInput
+                     value={accessPassword}
+                     onChangeText={setAccessPassword}
+                     placeholder="Enter password"
+                     placeholderTextColor={BRAND.textMuted}
+                     secureTextEntry
+                     autoCapitalize="none"
+                     style={styles.passwordInput}
+                   />
+                 </View>
+               )}
             </View>
             <Pressable onPress={handleStartQuiz} style={styles.startBtn}>
                <Text style={styles.startBtnText}>Start Exam</Text>
@@ -412,6 +479,30 @@ const styles = StyleSheet.create({
   quizDesc: { fontSize: 15, color: BRAND.textMuted, lineHeight: 22, marginBottom: 20 },
   infoRow: { flexDirection: "row", alignItems: "center", gap: 10, marginTop: 16 },
   infoText: { fontSize: 15, fontWeight: "600", color: BRAND.text },
+
+  passwordBox: {
+    marginTop: 18,
+    paddingTop: 14,
+    borderTopWidth: 1,
+    borderTopColor: BRAND.border,
+  },
+  passwordLabel: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: BRAND.text,
+    marginBottom: 10,
+  },
+  passwordInput: {
+    height: 48,
+    borderWidth: 1,
+    borderColor: BRAND.border,
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    backgroundColor: BRAND.background,
+    color: BRAND.text,
+    fontSize: 15,
+    fontWeight: "600",
+  },
   
   startBtn: {
     backgroundColor: BRAND.primary,

@@ -1,7 +1,34 @@
 import axios from "axios";
+import { Platform } from "react-native";
+import Constants from "expo-constants";
 import { LoginResponse, User } from "../types/auth";
 
-const BASE_URL = process.env.EXPO_PUBLIC_API_URL || "https://attendqr.tech/api";
+function resolveDevBaseUrl() {
+  const envUrl = String(process.env.EXPO_PUBLIC_API_URL || "").trim();
+  const isProdEnv = /attendqr\.tech\/api\/?$/i.test(envUrl);
+
+  if (!__DEV__ || !isProdEnv) {
+    return envUrl || "https://attendqr.tech/api";
+  }
+
+  const hostUri =
+    (Constants as any)?.expoConfig?.hostUri ||
+    (Constants as any)?.manifest2?.extra?.expoGo?.debuggerHost ||
+    "";
+  const hostIp = String(hostUri).split(":")[0];
+
+  if (hostIp) {
+    return `http://${hostIp}:5001/api`;
+  }
+
+  if (Platform.OS === "android") {
+    return "http://10.0.2.2:5001/api";
+  }
+
+  return "http://localhost:5001/api";
+}
+
+const BASE_URL = resolveDevBaseUrl();
 const SOCKET_BASE_URL = BASE_URL.replace(/\/api\/?$/, "");
 const API_ORIGIN = SOCKET_BASE_URL;
 
@@ -23,7 +50,9 @@ export function resolveMediaUrl(raw?: string | null) {
   }
 
   if (value.startsWith("/")) {
-    return `${API_ORIGIN}${value}`;
+    // Some older rows may contain "/api/uploads/...". Static files are served at "/uploads".
+    const normalizedPath = value.startsWith("/api/") ? value.slice(4) : value;
+    return `${API_ORIGIN}${normalizedPath}`;
   }
 
   return `${API_ORIGIN}/${value}`;
