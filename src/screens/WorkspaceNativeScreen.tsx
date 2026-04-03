@@ -365,7 +365,7 @@ export default function WorkspaceNativeScreen({ token, user, navigation }: any) 
       </AnimatedPressable>
 
       <Modal visible={isActionModalVisible} transparent animationType="slide" onRequestClose={() => setActionModalVisible(false)}>
-        <KeyboardAvoidingView style={styles.modalOverlay} behavior={Platform.OS === "ios" ? "padding" : undefined}>
+        <KeyboardAvoidingView style={styles.modalOverlay} behavior={Platform.OS === "ios" ? "padding" : "height"}>
           <Pressable style={styles.modalBackdrop} onPress={() => setActionModalVisible(false)} />
           <View style={[styles.modalContent, { paddingBottom: insets.bottom || 20 }]}>
             <View style={styles.modalHandleContainer}><View style={styles.modalHandle} /></View>

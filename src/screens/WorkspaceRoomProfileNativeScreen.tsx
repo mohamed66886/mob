@@ -178,6 +178,8 @@ export default function WorkspaceRoomProfileNativeScreen({ token, user, route, n
         onScroll={scrollHandler}
         scrollEventThrottle={16}
         showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
         ListHeaderComponent={
           <>
             <View style={[styles.heroCard, { paddingTop: insets.top + 50 }]}>

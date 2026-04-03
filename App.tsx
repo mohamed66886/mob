@@ -44,6 +44,7 @@ import {
 } from "./src/lib/offlineQueue";
 import { disconnectRealtimeSocket, getRealtimeSocket } from "./src/lib/realtime";
 import { clearToken, getToken, saveToken } from "./src/lib/tokenStorage";
+import { appendReleaseLog, installGlobalErrorLogging } from "./src/lib/releaseLogger";
 import { User, UserRole } from "./src/types/auth";
 import { ErrorBoundary } from "./src/components/ErrorBoundary";
 import DashboardNativeScreen from "./src/screens/DashboardNativeScreen";
@@ -2131,6 +2132,10 @@ export default function App() {
   const liveNotificationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pushTokenRef = useRef<string | null>(null);
 
+  useEffect(() => {
+    installGlobalErrorLogging();
+  }, []);
+
   const showLiveBanner = useCallback((title: string, message: string) => {
     setLiveNotification({
       id: Date.now(),
@@ -2223,7 +2228,8 @@ export default function App() {
       const me = await getMe(savedToken);
       setToken(savedToken);
       setUser(me);
-    } catch {
+    } catch (error) {
+      appendReleaseLog("warn", "restoreSession failed", error);
       await clearToken();
       setToken(null);
       setUser(null);
@@ -2375,6 +2381,7 @@ export default function App() {
       }
     } catch (error: any) {
       console.error("Login error:", error);
+      appendReleaseLog("error", "handleLogin failed", error);
       const message =
         error?.response?.data?.error || error?.message || "Login failed. Please try again.";
       throw new Error(message);

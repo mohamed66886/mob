@@ -300,7 +300,7 @@ export default function SubjectMaterialsNativeScreen({ token, user, route, navig
 
       {/* Bottom Sheet Modal */}
       <Modal visible={isModalVisible} transparent animationType="slide" onRequestClose={() => setModalVisible(false)}>
-        <KeyboardAvoidingView style={styles.modalOverlay} behavior={Platform.OS === "ios" ? "padding" : undefined}>
+        <KeyboardAvoidingView style={styles.modalOverlay} behavior={Platform.OS === "ios" ? "padding" : "height"}>
           <Pressable style={styles.modalBackdrop} onPress={() => setModalVisible(false)} />
           <View style={[styles.modalContent, { paddingBottom: insets.bottom || 20 }]}>
             

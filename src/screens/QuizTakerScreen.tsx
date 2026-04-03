@@ -8,6 +8,8 @@ import {
   FlatList,
   Alert,
   TextInput,
+  KeyboardAvoidingView,
+  Platform,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRoute, useNavigation } from "@react-navigation/native";
@@ -321,44 +323,46 @@ export default function QuizTakerScreen({
   if (status === "pending") {
     return (
       <SafeAreaView style={styles.screen}>
+        <KeyboardAvoidingView style={styles.pendingKeyboardView} behavior={Platform.OS === "ios" ? "padding" : "height"}>
          <View style={styles.header}>
-            <Pressable onPress={() => navigation.goBack()} style={styles.backBtn}>
-               <ChevronLeft size={24} color={BRAND.text} />
-            </Pressable>
-            <Text style={styles.headerTitle}>Exam Room</Text>
+           <Pressable onPress={() => navigation.goBack()} style={styles.backBtn}>
+             <ChevronLeft size={24} color={BRAND.text} />
+           </Pressable>
+           <Text style={styles.headerTitle}>Exam Room</Text>
          </View>
          <View style={styles.pendingContainer}>
-            <View style={styles.pendingCard}>
-               <Text style={styles.quizTitle}>{quizDetails.title}</Text>
-               <Text style={styles.quizDesc}>{quizDetails.description}</Text>
-               <View style={styles.infoRow}>
-                  <Clock size={20} color={BRAND.primary} />
-                  <Text style={styles.infoText}>Time Limit: {quizDetails.time_limit_minutes} Mins</Text>
-               </View>
-               <View style={[styles.infoRow, { marginTop: 12 }]}>
-                  <AlertTriangle size={20} color={BRAND.danger} />
-                  <Text style={[styles.infoText, { color: BRAND.danger }]}>Do not leave the app during the exam.</Text>
-               </View>
+           <View style={styles.pendingCard}>
+             <Text style={styles.quizTitle}>{quizDetails.title}</Text>
+             <Text style={styles.quizDesc}>{quizDetails.description}</Text>
+             <View style={styles.infoRow}>
+               <Clock size={20} color={BRAND.primary} />
+               <Text style={styles.infoText}>Time Limit: {quizDetails.time_limit_minutes} Mins</Text>
+             </View>
+             <View style={[styles.infoRow, { marginTop: 12 }]}>
+               <AlertTriangle size={20} color={BRAND.danger} />
+               <Text style={[styles.infoText, { color: BRAND.danger }]}>Do not leave the app during the exam.</Text>
+             </View>
 
-               {needsPassword && (
-                 <View style={styles.passwordBox}>
-                   <Text style={styles.passwordLabel}>Exam Password</Text>
-                   <TextInput
-                     value={accessPassword}
-                     onChangeText={setAccessPassword}
-                     placeholder="Enter password"
-                     placeholderTextColor={BRAND.textMuted}
-                     secureTextEntry
-                     autoCapitalize="none"
-                     style={styles.passwordInput}
-                   />
-                 </View>
-               )}
-            </View>
-            <Pressable onPress={handleStartQuiz} style={styles.startBtn}>
-               <Text style={styles.startBtnText}>Start Exam</Text>
-            </Pressable>
+             {needsPassword && (
+              <View style={styles.passwordBox}>
+                <Text style={styles.passwordLabel}>Exam Password</Text>
+                <TextInput
+                 value={accessPassword}
+                 onChangeText={setAccessPassword}
+                 placeholder="Enter password"
+                 placeholderTextColor={BRAND.textMuted}
+                 secureTextEntry
+                 autoCapitalize="none"
+                 style={styles.passwordInput}
+                />
+              </View>
+             )}
+           </View>
+           <Pressable onPress={handleStartQuiz} style={styles.startBtn}>
+             <Text style={styles.startBtnText}>Start Exam</Text>
+           </Pressable>
          </View>
+        </KeyboardAvoidingView>
       </SafeAreaView>
     );
   }
@@ -450,6 +454,7 @@ export default function QuizTakerScreen({
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: BRAND.background },
+  pendingKeyboardView: { flex: 1 },
   loadingContainer: { flex: 1, justifyContent: "center", alignItems: "center", padding: 20 },
   header: {
     height: 56,

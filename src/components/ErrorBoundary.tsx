@@ -1,5 +1,6 @@
 import React, { ReactNode } from "react";
 import { View, Text, StyleSheet, Pressable } from "react-native";
+import { appendReleaseLog } from "../lib/releaseLogger";
 
 interface Props {
   children: ReactNode;
@@ -31,6 +32,11 @@ export class ErrorBoundary extends React.Component<Props, State> {
 
   componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
     console.error("ErrorBoundary caught:", error, errorInfo);
+    appendReleaseLog("error", "ErrorBoundary caught", {
+      message: error?.message,
+      stack: error?.stack,
+      componentStack: errorInfo?.componentStack,
+    });
   }
 
   render() {
@@ -40,6 +46,11 @@ export class ErrorBoundary extends React.Component<Props, State> {
           <View style={styles.card}>
             <Text style={styles.title}>⚠️ Something went wrong</Text>
             <Text style={styles.error}>{this.state.error?.message}</Text>
+            {this.state.error?.stack ? (
+              <Text style={styles.stackPreview} numberOfLines={5}>
+                {this.state.error.stack}
+              </Text>
+            ) : null}
             <Pressable
               onPress={() => this.setState({ hasError: false, error: null })}
               style={styles.button}
@@ -81,6 +92,11 @@ const styles = StyleSheet.create({
     color: BRAND.textMuted,
     marginBottom: 16,
     lineHeight: 20,
+  },
+  stackPreview: {
+    fontSize: 12,
+    color: BRAND.textMuted,
+    marginBottom: 16,
   },
   button: {
     backgroundColor: BRAND.primary,

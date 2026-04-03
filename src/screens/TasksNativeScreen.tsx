@@ -7,7 +7,6 @@ import {
   Pressable,
   TextInput,
   Alert,
-  Linking,
   ScrollView,
   Modal,
   KeyboardAvoidingView,
@@ -16,6 +15,7 @@ import {
   AppStateStatus,
 } from "react-native";
 import { WebView } from "react-native-webview";
+import RNFetchBlob from "rn-fetch-blob";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
 import * as DocumentPicker from "expo-document-picker";
@@ -100,6 +100,37 @@ function parseServerDateTime(value: unknown): Date | null {
 
 function authHeaders(token: string) {
   return { headers: { Authorization: `Bearer ${token}` } };
+}
+
+function getFileExtensionFromUrl(url: string) {
+  const clean = String(url || "").split("?")[0];
+  const idx = clean.lastIndexOf(".");
+  if (idx < 0) return "";
+  return clean.slice(idx + 1).trim().toLowerCase();
+}
+
+function getMimeByExtension(ext: string) {
+  const map: Record<string, string> = {
+    pdf: "application/pdf",
+    png: "image/png",
+    jpg: "image/jpeg",
+    jpeg: "image/jpeg",
+    gif: "image/gif",
+    webp: "image/webp",
+    txt: "text/plain",
+    html: "text/html",
+    htm: "text/html",
+    doc: "application/msword",
+    docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    xls: "application/vnd.ms-excel",
+    xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ppt: "application/vnd.ms-powerpoint",
+    pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    zip: "application/zip",
+    rar: "application/vnd.rar",
+    csv: "text/csv",
+  };
+  return map[String(ext || "").toLowerCase()] || "application/octet-stream";
 }
 
 // --- Performance: Skeleton Loader ---
@@ -233,6 +264,47 @@ export default function TasksNativeScreen({ token, user }: { token: string; user
   const selectedUploadTask = useMemo(() => tasks.find((t) => t.id === uploadTaskId) || null, [tasks, uploadTaskId]);
   const selectedDetailsTask = useMemo(() => tasks.find((t) => t.id === detailsTaskId) || null, [tasks, detailsTaskId]);
 
+  const closeFileViewer = useCallback(() => {
+    setFileViewerVisible(false);
+    setFileViewerUrl(null);
+  }, []);
+
+  const openFileExternally = useCallback(async (url: string) => {
+    try {
+      const guessedExt = getFileExtensionFromUrl(url) || "bin";
+      const mimeByExt = getMimeByExtension(guessedExt);
+      const targetPath = `${RNFetchBlob.fs.dirs.DocumentDir}/task_${Date.now()}.${guessedExt}`;
+
+      const response = await RNFetchBlob.config({
+        fileCache: true,
+        path: targetPath,
+      }).fetch("GET", url, {
+        Authorization: `Bearer ${token}`,
+      });
+
+      const info = response.info();
+      if (info.status >= 400) {
+        Alert.alert("Error", "Could not download the task file");
+        return;
+      }
+
+      const downloadedPath = response.path();
+      const headerMime =
+        info?.headers?.["Content-Type"] ||
+        info?.headers?.["content-type"] ||
+        mimeByExt;
+
+      if (Platform.OS === "android") {
+        await RNFetchBlob.android.actionViewIntent(downloadedPath, headerMime);
+        return;
+      }
+
+      await RNFetchBlob.ios.openDocument(downloadedPath);
+    } catch {
+      Alert.alert("Error", "Failed to open file");
+    }
+  }, [token]);
+
   const openTaskAttachment = useCallback(async (task: any) => {
     const url = resolveMediaUrl(task?.attachment_url);
     if (!url) {
@@ -240,11 +312,11 @@ export default function TasksNativeScreen({ token, user }: { token: string; user
       return;
     }
 
-    // In-app viewer (requested): show the file inside the app instead of launching the browser.
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    setFileViewerUrl(url);
-    setFileViewerVisible(true);
-  }, []);
+
+    // Reliable strategy: always download first with auth header, then open by the OS.
+    await openFileExternally(url);
+  }, [openFileExternally]);
 
   const getSubmitWindow = useCallback((task: any) => {
     const now = Date.now();
@@ -433,7 +505,7 @@ export default function TasksNativeScreen({ token, user }: { token: string; user
       >
         <KeyboardAvoidingView
           style={styles.modalOverlay}
-          behavior={Platform.OS === "ios" ? "padding" : undefined}
+          behavior={Platform.OS === "ios" ? "padding" : "height"}
         >
           <Pressable
             style={styles.modalBackdrop}
@@ -537,7 +609,7 @@ export default function TasksNativeScreen({ token, user }: { token: string; user
 
       {/* CREATE TASK MODAL (Bottom Sheet Style) */}
       <Modal visible={isCreateModalVisible} transparent animationType="slide" onRequestClose={() => setCreateModalVisible(false)}>
-        <KeyboardAvoidingView style={styles.modalOverlay} behavior={Platform.OS === "ios" ? "padding" : undefined}>
+        <KeyboardAvoidingView style={styles.modalOverlay} behavior={Platform.OS === "ios" ? "padding" : "height"}>
           <Pressable style={styles.modalBackdrop} onPress={() => setCreateModalVisible(false)} />
           <View style={[styles.modalContent, { paddingBottom: insets.bottom || 20, maxHeight: '85%' }]}>
             <View style={styles.modalHandleContainer}><View style={styles.modalHandle} /></View>
@@ -603,7 +675,7 @@ export default function TasksNativeScreen({ token, user }: { token: string; user
 
       {/* SUBMIT TASK MODAL (Bottom Sheet Style) */}
       <Modal visible={isSubmitModalVisible} transparent animationType="slide" onRequestClose={() => setSubmitModalVisible(false)}>
-        <KeyboardAvoidingView style={styles.modalOverlay} behavior={Platform.OS === "ios" ? "padding" : undefined}>
+        <KeyboardAvoidingView style={styles.modalOverlay} behavior={Platform.OS === "ios" ? "padding" : "height"}>
           <Pressable style={styles.modalBackdrop} onPress={() => setSubmitModalVisible(false)} />
           <View style={[styles.modalContent, { paddingBottom: insets.bottom || 20 }]}>
             <View style={styles.modalHandleContainer}><View style={styles.modalHandle} /></View>
@@ -657,29 +729,28 @@ export default function TasksNativeScreen({ token, user }: { token: string; user
         visible={isFileViewerVisible}
         transparent
         animationType="slide"
-        onRequestClose={() => {
-          setFileViewerVisible(false);
-          setFileViewerUrl(null);
-        }}
+        onRequestClose={closeFileViewer}
       >
         <View style={[styles.modalOverlay, { justifyContent: "flex-end" }]}>
           <Pressable
             style={styles.modalBackdrop}
-            onPress={() => {
-              setFileViewerVisible(false);
-              setFileViewerUrl(null);
-            }}
+            onPress={closeFileViewer}
           />
           <View style={[styles.modalContent, { paddingBottom: insets.bottom || 20, height: "85%" }]}>
             <View style={styles.modalHandleContainer}><View style={styles.modalHandle} /></View>
 
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>File</Text>
+              {!!fileViewerUrl && (
+                <Pressable
+                  onPress={() => openFileExternally(fileViewerUrl)}
+                  style={[styles.closeBtn, { marginRight: 8 }]}
+                >
+                  <Text style={{ color: BRAND.primary, fontWeight: "700" }}>Open</Text>
+                </Pressable>
+              )}
               <Pressable
-                onPress={() => {
-                  setFileViewerVisible(false);
-                  setFileViewerUrl(null);
-                }}
+                onPress={closeFileViewer}
                 style={styles.closeBtn}
               >
                 <X color={BRAND.textMuted} size={22} strokeWidth={2.5} />
@@ -699,12 +770,16 @@ export default function TasksNativeScreen({ token, user }: { token: string; user
                     </View>
                   )}
                   <WebView
-                    source={{ uri: fileViewerUrl }}
+                    source={{ uri: fileViewerUrl, headers: { Authorization: `Bearer ${token}` } }}
                     onLoadStart={() => setFileViewerLoading(true)}
                     onLoadEnd={() => setFileViewerLoading(false)}
                     onError={() => {
                       setFileViewerLoading(false);
-                      Alert.alert("Error", "Failed to load file");
+                      Alert.alert("Error", "Failed to preview file. Opening in browser instead.");
+                      if (fileViewerUrl) {
+                        openFileExternally(fileViewerUrl);
+                        closeFileViewer();
+                      }
                     }}
                   />
                 </View>

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState, useRef } from "react";
+import React, { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import {
   ActivityIndicator,
   Pressable,
@@ -33,7 +33,7 @@ import * as Haptics from "expo-haptics";
 
 import { api, resolveMediaUrl } from "../lib/api";
 import { User, UserRole } from "../types/auth";
-import LottieView from "../components/AppLottieView";
+import LottieView from "../components/AppLottieView.native";
 import {
   BookMarked,
   TrendingUp,
@@ -72,6 +72,15 @@ function authHeaders(token: string) {
   return { headers: { Authorization: `Bearer ${token}` } };
 }
 
+type StudentAttendanceRow = {
+  id: number;
+  name: string;
+  doctor_name: string;
+  attended_lectures: number;
+  total_lectures: number;
+  attendance_percentage: number;
+};
+
 // ==========================================
 // 1. Animated Progress Bar
 // ==========================================
@@ -97,8 +106,8 @@ function AnimatedProgressBar({ percentage, color }: { percentage: number; color:
 // 2. Hero Slider (Carousel)
 // ==========================================
 const SLIDER_DATA = [
-  { id: "1", image: "https://scontent.fcai20-6.fna.fbcdn.net/v/t39.30808-6/615922356_122116726935098137_3368359818312792439_n.jpg?_nc_cat=109&ccb=1-7&_nc_sid=7b2446&_nc_ohc=7dqeL4vODYkQ7kNvwFM6UaL&_nc_oc=AdqFJrxxo-PuIBMMw4PUXp8ZpnEGEqZLa2ycj0TKfZGpupL4lItgeZTkT9MdMuFoIQw&_nc_zt=23&_nc_ht=scontent.fcai20-6.fna&_nc_gid=EZMih5NSWzWpd7rz7zhMgg&_nc_ss=7a32e&oh=00_Afx_4agF0AVSYHuNd8Emhr27DbXvEiVSdI5Pq7Pb2U0Dyg&oe=69CBFB3B", title: "Welcome to Campus" },
-  { id: "2", image: "https://scontent.fcai20-2.fna.fbcdn.net/v/t39.30808-6/593271377_872689161975179_7790153367077286875_n.jpg?stp=cp6_dst-jpg_tt6&_nc_cat=104&ccb=1-7&_nc_sid=7b2446&_nc_ohc=Rro9mAwWUU4Q7kNvwFUHXXL&_nc_oc=Adr2hn-OEVqiEkUEhl8FXTJWSnf5ZLuA7eCFBVZ--qpnLAnIwTiGgOPIhoFZatuv-2Y&_nc_zt=23&_nc_ht=scontent.fcai20-2.fna&_nc_gid=4rGC3dB8-jKJRHt8WtsgtA&_nc_ss=7a32e&oh=00_AfxoXi5jZ9H-xVFjGNHuGA2N2tq6DPCQwiVJ42p2lkXzmw&oe=69CBF97E", title: "Explore Your Courses Easily" },
+  { id: "1", image: "https://scontent.fcai19-12.fna.fbcdn.net/v/t39.30808-6/641274873_1370114118495356_2944264532323131114_n.jpg?_nc_cat=110&ccb=1-7&_nc_sid=13d280&_nc_ohc=leOoOfY-7psQ7kNvwFV_P2w&_nc_oc=Adq16OMWqI-htap3IdFKxH4wXeIuxG8oeBLf3Q2tA2xANGau2ZLK4PK9x8CMPIbV608&_nc_zt=23&_nc_ht=scontent.fcai19-12.fna&_nc_gid=buYsgyl-9pYT0yC0f7yxyQ&_nc_ss=7a3a8&oh=00_Af2L-_RM8pRuSGMErosPogHJoKVWGq_vENnq5CuRMuUYDA&oe=69D52419", title: "Welcome to Campus" },
+  { id: "2", image: "https://scontent.fcai19-12.fna.fbcdn.net/v/t39.30808-6/582711450_1288170746689694_4089584294249058597_n.jpg?_nc_cat=110&ccb=1-7&_nc_sid=13d280&_nc_ohc=hiwcGv_TpXQQ7kNvwFKEz2y&_nc_oc=AdppUxNGyOJQf-iY73TJwcSsiomiwNEVUoXExHojtcwxSvnrVr8vs7DbeJrpypIaWO8&_nc_zt=23&_nc_ht=scontent.fcai19-12.fna&_nc_gid=8aYB9AbMaPQ838Zrhv2SEQ&_nc_ss=7a3a8&oh=00_Af1L4LRe8_1z5dLnX-AN9yxOAgdqLsWLKQ0gps6VoPD88w&oe=69D53AA2", title: "Explore Your Courses Easily" },
   { id: "3", image: "https://codeforces.com/userpic.codeforces.org/3855328/title/d29cab9da9e6ef26.jpg", title: "Build Your Skills" },
 ];
 
@@ -196,21 +205,7 @@ function ActionCard({ item, onOpenScreen }: any) {
 // ==========================================
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
-function StudentDashboard({ token, onOpenScreen }: any) {
-  const [subjects, setSubjects] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    const fetchAttendance = async () => {
-      try {
-        const res = await api.get("/attendance/my-attendance", authHeaders(token));
-        setSubjects(res.data || []);
-      } catch (err) {
-        console.error("Failed to load attendance", err);
-      } finally { setLoading(false); }
-    };
-    fetchAttendance();
-  }, [token]);
+function StudentDashboard({ subjects, loading, onOpenScreen }: { subjects: StudentAttendanceRow[]; loading: boolean; onOpenScreen: (screen: string, params?: Record<string, any>) => void }) {
 
   if (loading) {
     return (
@@ -226,8 +221,8 @@ function StudentDashboard({ token, onOpenScreen }: any) {
   }
 
   const totalSubjects = subjects.length;
-  const avgAttendance = totalSubjects > 0 ? Math.round(subjects.reduce((a, s) => a + s.attendance_percentage, 0) / totalSubjects) : 0;
-  const goodStanding = subjects.filter((s) => s.attendance_percentage >= 75).length;
+  const avgAttendance = totalSubjects > 0 ? Math.round(subjects.reduce((a: number, s: StudentAttendanceRow) => a + s.attendance_percentage, 0) / totalSubjects) : 0;
+  const goodStanding = subjects.filter((s: StudentAttendanceRow) => s.attendance_percentage >= 75).length;
 
   return (
     <View style={styles.sectionContainer}>
@@ -282,7 +277,7 @@ function StudentDashboard({ token, onOpenScreen }: any) {
         </Animated.View>
       ) : (
         <Animated.View entering={FadeInDown.delay(500).springify()} style={[styles.cardShadow, styles.listGroup]}>
-          {subjects.map((s, index) => {
+          {subjects.map((s: StudentAttendanceRow, index: number) => {
             const pct = s.attendance_percentage;
             const barColor = pct >= 75 ? BRAND.success : pct >= 50 ? BRAND.warning : BRAND.danger;
             const isLast = index === subjects.length - 1;
@@ -322,16 +317,46 @@ export default function DashboardNativeScreen({ token, user }: { token: string; 
   const insets = useSafeAreaInsets(); // Accurately account for the safe area insets
   const scrollY = useSharedValue(0);
   const [refreshing, setRefreshing] = useState(false);
+  const [studentSubjects, setStudentSubjects] = useState<any[]>([]);
+  const [studentLoading, setStudentLoading] = useState(true);
   const sheetRef = useRef<BottomSheet>(null);
   const snapPoints = useMemo(() => ["25%", "50%"], []);
+  const isStudent = user?.role === "student";
 
-  const onRefresh = async () => {
+  const fetchStudentAttendance = useCallback(async () => {
+    if (!isStudent) return;
+
+    try {
+      const res = await api.get("/attendance/my-attendance", authHeaders(token));
+      setStudentSubjects(Array.isArray(res.data) ? res.data : []);
+    } catch (err) {
+      console.error("Failed to load attendance", err);
+      setStudentSubjects([]);
+    } finally {
+      setStudentLoading(false);
+    }
+  }, [isStudent, token]);
+
+  useEffect(() => {
+    if (!isStudent) {
+      setStudentLoading(false);
+      setStudentSubjects([]);
+      return;
+    }
+
+    setStudentLoading(true);
+    fetchStudentAttendance();
+  }, [isStudent, fetchStudentAttendance]);
+
+  const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    setTimeout(() => {
+    try {
+      await fetchStudentAttendance();
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } finally {
       setRefreshing(false);
-    }, 1200);
-  };
+    }
+  }, [fetchStudentAttendance]);
 
   const onScroll = useAnimatedScrollHandler({
     onScroll: (event) => { scrollY.value = event.contentOffset.y; },
@@ -346,7 +371,6 @@ export default function DashboardNativeScreen({ token, user }: { token: string; 
     opacity: interpolate(scrollY.value, [0, 50], [1, 0], Extrapolation.CLAMP),
   }));
 
-  const isStudent = user?.role === "student";
   const displayName = useMemo(() => {
     const fullName = (user?.name || "User").trim();
     const parts = fullName.split(/\s+/).filter(Boolean);
@@ -404,7 +428,7 @@ export default function DashboardNativeScreen({ token, user }: { token: string; 
       >
         <HeroSlider scrollY={scrollY} />
 
-        {isStudent && <StudentDashboard token={token} onOpenScreen={openScreen} />}
+        {isStudent && <StudentDashboard subjects={studentSubjects} loading={studentLoading} onOpenScreen={openScreen} />}
       </Animated.ScrollView>
 
       <BottomSheet ref={sheetRef} index={-1} snapPoints={snapPoints}>

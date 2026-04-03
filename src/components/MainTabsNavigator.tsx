@@ -25,6 +25,8 @@ import * as Haptics from "expo-haptics";
 import { BlurView } from "expo-blur";
 import { api } from "../lib/api";
 import SocketManager from "../lib/realtime";
+import { ErrorBoundary } from "./ErrorBoundary";
+import { appendReleaseLog } from "../lib/releaseLogger";
 import { UserRole } from "../types/auth";
 
 const { width } = Dimensions.get("window");
@@ -43,6 +45,9 @@ type MainTabsParamList = {
 
 const Tabs = createBottomTabNavigator<MainTabsParamList>();
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
+const DEBUG_DISABLE_SOCKET = process.env.EXPO_PUBLIC_DISABLE_MAIN_TABS_SOCKET === "1";
+const DEBUG_DISABLE_BADGES_API = process.env.EXPO_PUBLIC_DISABLE_MAIN_TABS_API === "1";
+const DEBUG_DISABLE_CUSTOM_TAB_BAR = process.env.EXPO_PUBLIC_DISABLE_CUSTOM_TAB_BAR === "1";
 
 // ---------------------------------------------------------
 // 1. Smart Animated Badge (Pop Effect)
@@ -74,6 +79,99 @@ function PulsingBadge({ count }: { count?: number | string }) {
     <Animated.View style={[styles.badgeContainer, animatedStyle]}>
       <Text style={styles.badgeText}>{count}</Text>
     </Animated.View>
+  );
+}
+
+type TabBarItemProps = {
+  route: any;
+  index: number;
+  state: any;
+  descriptors: any;
+  navigation: any;
+  primaryColor: string;
+};
+
+function TabBarItem({
+  route,
+  index,
+  state,
+  descriptors,
+  navigation,
+  primaryColor,
+}: TabBarItemProps) {
+  const { options } = descriptors[route.key];
+  const isFocused = state.index === index;
+  const badgeCount = options.tabBarBadge;
+
+  // Keep animated hooks at component top-level. Calling hooks inside map callbacks can crash in release.
+  const pressScale = useSharedValue(1);
+  const iconScale = useSharedValue(isFocused ? 1.15 : 1);
+
+  useEffect(() => {
+    iconScale.value = withSpring(isFocused ? 1.15 : 1, { damping: 12, stiffness: 150 });
+  }, [iconScale, isFocused]);
+
+  const animatedContainerStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: pressScale.value }],
+  }));
+
+  const animatedIconStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: iconScale.value }, { translateY: isFocused ? -2 : 0 }],
+  }));
+
+  const onPressIn = () => {
+    pressScale.value = withSpring(0.9);
+  };
+
+  const onPressOut = () => {
+    pressScale.value = withSpring(1);
+  };
+
+  const onPress = () => {
+    if (!isFocused) {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+    }
+
+    const event = navigation.emit({
+      type: "tabPress",
+      target: route.key,
+      canPreventDefault: true,
+    });
+
+    if (!isFocused && !event.defaultPrevented) {
+      navigation.navigate(route.name);
+    }
+  };
+
+  return (
+    <AnimatedPressable
+      key={route.key}
+      onPress={onPress}
+      onPressIn={onPressIn}
+      onPressOut={onPressOut}
+      style={[styles.tabItem, animatedContainerStyle]}
+    >
+      <View style={styles.iconContainer}>
+        <Animated.View style={animatedIconStyle}>
+          {options.tabBarIcon({
+            focused: isFocused,
+            color: isFocused ? primaryColor : "#8e8e93",
+            size: 24,
+          })}
+        </Animated.View>
+        <PulsingBadge count={badgeCount} />
+      </View>
+
+      <Text
+        style={[
+          styles.label,
+          { color: isFocused ? primaryColor : "#8e8e93" },
+          isFocused && styles.labelFocused,
+        ]}
+      >
+        {options.tabBarLabel}
+      </Text>
+    </AnimatedPressable>
   );
 }
 
@@ -113,69 +211,17 @@ function CustomTabBar({ state, descriptors, navigation, primaryColor, insets }: 
         <View style={[styles.indicatorInner, { backgroundColor: primaryColor + "15" }]} />
       </Animated.View>
 
-      {state.routes.map((route: any, index: number) => {
-        const { options } = descriptors[route.key];
-        const isFocused = state.index === index;
-        const badgeCount = options.tabBarBadge;
-
-        // Micro-interaction Scale Value
-        const pressScale = useSharedValue(1);
-        const iconScale = useSharedValue(isFocused ? 1.15 : 1);
-
-        useEffect(() => {
-          iconScale.value = withSpring(isFocused ? 1.15 : 1, { damping: 12, stiffness: 150 });
-        }, [isFocused, iconScale]);
-
-        const animatedContainerStyle = useAnimatedStyle(() => ({
-          transform: [{ scale: pressScale.value }],
-        }));
-        
-        const animatedIconStyle = useAnimatedStyle(() => ({
-          transform: [{ scale: iconScale.value }, { translateY: isFocused ? -2 : 0 }],
-        }));
-
-        const onPressIn = () => { pressScale.value = withSpring(0.9); };
-        const onPressOut = () => { pressScale.value = withSpring(1); };
-
-        const onPress = () => {
-          if (!isFocused) Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-
-          const event = navigation.emit({
-            type: "tabPress",
-            target: route.key,
-            canPreventDefault: true,
-          });
-
-          if (!isFocused && !event.defaultPrevented) {
-            navigation.navigate(route.name);
-          }
-        };
-
-        return (
-          <AnimatedPressable 
-            key={route.key} 
-            onPress={onPress} 
-            onPressIn={onPressIn}
-            onPressOut={onPressOut}
-            style={[styles.tabItem, animatedContainerStyle]}
-          >
-            <View style={styles.iconContainer}>
-              <Animated.View style={animatedIconStyle}>
-                {options.tabBarIcon({
-                  focused: isFocused,
-                  color: isFocused ? primaryColor : "#8e8e93",
-                  size: 24,
-                })}
-              </Animated.View>
-              <PulsingBadge count={badgeCount} />
-            </View>
-
-            <Text style={[styles.label, { color: isFocused ? primaryColor : "#8e8e93" }, isFocused && styles.labelFocused]}>
-              {options.tabBarLabel}
-            </Text>
-          </AnimatedPressable>
-        );
-      })}
+      {state.routes.map((route: any, index: number) => (
+        <TabBarItem
+          key={route.key}
+          route={route}
+          index={index}
+          state={state}
+          descriptors={descriptors}
+          navigation={navigation}
+          primaryColor={primaryColor}
+        />
+      ))}
     </View>
   );
 }
@@ -214,7 +260,7 @@ type MainTabsNavigatorProps = {
 };
 
 function authHeaders(token: string) {
-  return { headers: { Authorization: `Bearer ${token}` } };
+  return { headers: { Authorization: `Bearer ${String(token || "").trim()}` } };
 }
 
 function getPendingTasksCount(tasks: any[], role?: UserRole) {
@@ -239,9 +285,10 @@ export default function MainTabsNavigator({
   
   const [pendingTasksCount, setPendingTasksCount] = useState(0); 
   const [unreadMessagesCount, setUnreadMessagesCount] = useState(0);
+  const hasValidToken = typeof token === "string" && token.trim().length > 0;
 
   const refreshBadges = useCallback(async () => {
-    if (!token) return;
+    if (!hasValidToken || DEBUG_DISABLE_BADGES_API) return;
 
     try {
       const requests: Promise<any>[] = [api.get("/workspaces/rooms", authHeaders(token))];
@@ -262,10 +309,11 @@ export default function MainTabsNavigator({
       } else {
         setPendingTasksCount(0);
       }
-    } catch {
+    } catch (error) {
+      appendReleaseLog("warn", "MainTabs refreshBadges failed", error);
       // Keep previous badge values on transient network errors.
     }
-  }, [token, userRole]);
+  }, [hasValidToken, token, userRole]);
 
   useEffect(() => {
     refreshBadges();
@@ -281,9 +329,17 @@ export default function MainTabsNavigator({
   );
 
   useEffect(() => {
-    if (!token) return;
+    if (!hasValidToken || DEBUG_DISABLE_SOCKET) return;
 
-    const socket = SocketManager.getInstance(token).socket;
+    let socket: any;
+    try {
+      socket = SocketManager.getInstance(token).socket;
+    } catch (error) {
+      appendReleaseLog("error", "MainTabs socket init failed", error);
+      return;
+    }
+
+    if (!socket) return;
     const onRealtimeRefresh = () => {
       refreshBadges();
     };
@@ -303,7 +359,7 @@ export default function MainTabsNavigator({
       socket.off("room_created", onRealtimeRefresh);
       socket.off("user_joined_room", onRealtimeRefresh);
     };
-  }, [refreshBadges, token]);
+  }, [hasValidToken, refreshBadges, token]);
 
 
 
@@ -315,10 +371,19 @@ export default function MainTabsNavigator({
     );
   }
 
+  if (!hasValidToken) {
+    appendReleaseLog("warn", "MainTabs mounted without token");
+    return (
+      <View style={styles.loadingWrap}>
+        <Text style={styles.badStateText}>Session expired. Please login again.</Text>
+      </View>
+    );
+  }
+
   return (
     <Tabs.Navigator
       tabBar={
-        useSimpleAndroidTabBar
+        useSimpleAndroidTabBar || DEBUG_DISABLE_CUSTOM_TAB_BAR
           ? undefined
           : (props) => <CustomTabBar {...props} primaryColor={primaryColor} insets={insets} />
       }
@@ -346,12 +411,24 @@ export default function MainTabsNavigator({
         },
       })}
     >
-      <Tabs.Screen name="Home">{renderHome}</Tabs.Screen>
-      <Tabs.Screen name="QR">{renderQr}</Tabs.Screen>
-      <Tabs.Screen name="Materials">{renderMaterials}</Tabs.Screen>
-      <Tabs.Screen name="Tasks">{renderTasks}</Tabs.Screen>
-      <Tabs.Screen name="Workspaces">{renderWorkspaces}</Tabs.Screen>
-      <Tabs.Screen name="Account">{renderAccount}</Tabs.Screen>
+      <Tabs.Screen name="Home">
+        {() => <ErrorBoundary>{renderHome()}</ErrorBoundary>}
+      </Tabs.Screen>
+      <Tabs.Screen name="QR">
+        {() => <ErrorBoundary>{renderQr()}</ErrorBoundary>}
+      </Tabs.Screen>
+      <Tabs.Screen name="Materials">
+        {() => <ErrorBoundary>{renderMaterials()}</ErrorBoundary>}
+      </Tabs.Screen>
+      <Tabs.Screen name="Tasks">
+        {() => <ErrorBoundary>{renderTasks()}</ErrorBoundary>}
+      </Tabs.Screen>
+      <Tabs.Screen name="Workspaces">
+        {(props) => <ErrorBoundary>{renderWorkspaces(props)}</ErrorBoundary>}
+      </Tabs.Screen>
+      <Tabs.Screen name="Account">
+        {() => <ErrorBoundary>{renderAccount()}</ErrorBoundary>}
+      </Tabs.Screen>
     </Tabs.Navigator>
   );
 }
@@ -408,6 +485,11 @@ const styles = StyleSheet.create({
   },
   labelFocused: {
     fontWeight: "800",
+  },
+  badStateText: {
+    fontSize: 14,
+    color: "#374151",
+    fontWeight: "600",
   },
   slidingIndicator: {
     position: "absolute",

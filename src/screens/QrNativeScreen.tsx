@@ -37,6 +37,7 @@ const BRAND = {
 const { width } = Dimensions.get("window");
 const NO_ACTIVE_LECTURE_LOTTIE_URL =
   "https://lottie.host/36231eac-12d7-4faa-962a-a63da9e1fea8/8RCqh6mgDP.json";
+const QR_VALIDITY_MS = 60000;
 
 const getAvatarColor = (name: string) => {
   const colors = ['#e17076', '#faa774', '#a695e7', '#7bc862', '#6ec9cb', '#65aadd', '#ee7aae'];
@@ -100,6 +101,7 @@ export default function UnifiedQrNativeScreen({ token, user }: { token: string; 
   const [permission, requestPermission] = useCameraPermissions();
   const wasLectureActiveRef = useRef(false);
   const consecutiveFetchFailuresRef = useRef(0);
+  const fetchInFlightRef = useRef(false);
 
   // --- Animations ---
   const scrollY = useRef(new Animated.Value(0)).current;
@@ -134,9 +136,10 @@ export default function UnifiedQrNativeScreen({ token, user }: { token: string; 
 
   // Data Fetching & Timers
   useEffect(() => {
+    if (!canGenerate) return;
     const interval = setInterval(() => setQrTs(Date.now()), 5000); // 5 seconds refresh rate
     return () => clearInterval(interval);
-  }, []);
+  }, [canGenerate]);
 
   useEffect(() => {
     if (!inlineNotice) return;
@@ -193,6 +196,10 @@ export default function UnifiedQrNativeScreen({ token, user }: { token: string; 
     };
 
     const fetchSubjects = async () => {
+      if (fetchInFlightRef.current) return;
+      if (canScan && isScanning) return;
+
+      fetchInFlightRef.current = true;
       try {
         const lecture = await resolveActiveLecture();
         const hasActiveLecture = !!lecture?.subject_id;
@@ -202,8 +209,21 @@ export default function UnifiedQrNativeScreen({ token, user }: { token: string; 
             id: lecture.subject_id,
             name: lecture.subject_name || "Active lecture",
           };
-          setSubjects([onlySubject]);
-          setSelectedSubjectId(onlySubject.id);
+          setSubjects((prev) => {
+            if (
+              prev.length === 1 &&
+              Number(prev[0]?.id) === Number(onlySubject.id) &&
+              String(prev[0]?.name || "") === String(onlySubject.name || "")
+            ) {
+              return prev;
+            }
+            return [onlySubject];
+          });
+
+          setSelectedSubjectId((prev) => {
+            if (Number(prev) === Number(onlySubject.id)) return prev;
+            return onlySubject.id;
+          });
 
           if (!wasLectureActiveRef.current) {
             setInlineNotice({
@@ -214,9 +234,9 @@ export default function UnifiedQrNativeScreen({ token, user }: { token: string; 
 
           consecutiveFetchFailuresRef.current = 0;
         } else {
-          setSubjects([]);
-          setSelectedSubjectId(null);
-          setStudents([]);
+          setSubjects((prev) => (prev.length === 0 ? prev : []));
+          setSelectedSubjectId((prev) => (prev === null ? prev : null));
+          setStudents((prev) => (prev.length === 0 ? prev : []));
 
           if (wasLectureActiveRef.current) {
             setInlineNotice({
@@ -238,15 +258,17 @@ export default function UnifiedQrNativeScreen({ token, user }: { token: string; 
           });
         }
       } finally {
+        fetchInFlightRef.current = false;
         setIsLoading(false);
       }
     };
 
     fetchSubjects();
-    const interval = setInterval(fetchSubjects, 3000);
+    // Lower polling pressure for large classes to avoid backend spikes.
+    const interval = setInterval(fetchSubjects, canScan ? 12000 : 5000);
 
     return () => clearInterval(interval);
-  }, [role, token]);
+  }, [role, token, canScan, isScanning]);
 
   useEffect(() => {
     if (!selectedSubjectId || isStudent) {
@@ -273,11 +295,24 @@ export default function UnifiedQrNativeScreen({ token, user }: { token: string; 
       const parsedData = JSON.parse(data);
       const qrDoctorId = Number(parsedData?.doctorId);
       const qrTs = Number(parsedData?.ts);
+      const qrExp = Number(parsedData?.exp);
       const qrSubjectId = Number(parsedData?.subjectId);
       const selectedId = Number(selectedSubjectId);
+      const now = Date.now();
 
       if (!Number.isInteger(qrDoctorId) || !Number.isInteger(qrTs) || !Number.isInteger(qrSubjectId)) {
         throw new Error("Invalid QR");
+      }
+
+      if (Number.isFinite(qrExp) && Number.isInteger(qrExp)) {
+        if (now > qrExp) {
+          setInlineNotice({
+            type: "error",
+            message: "This QR code has expired. Please scan a new one.",
+          });
+          setTimeout(() => setScanLock(false), 2000);
+          return;
+        }
       }
 
       if (qrSubjectId !== selectedId) {
@@ -290,7 +325,7 @@ export default function UnifiedQrNativeScreen({ token, user }: { token: string; 
       }
 
       // Keep in sync with backend validity window to avoid false client-side rejects.
-      if (Math.abs(Date.now() - qrTs) > 60000) {
+      if (Math.abs(now - qrTs) > QR_VALIDITY_MS) {
         setInlineNotice({
           type: "error",
           message: "This QR code has expired. Please scan a new one.",
@@ -446,7 +481,7 @@ export default function UnifiedQrNativeScreen({ token, user }: { token: string; 
           <View style={styles.qrHeroSection}>
             <Animated.View style={[styles.qrWrapper, styles.cardShadow, { transform: [{ scale: pulseAnim }] }]}>
               <QRCode
-                value={JSON.stringify({ doctorId: user.id, subjectId: selectedSubjectId, ts: qrTs })}
+                value={JSON.stringify({ doctorId: user.id, subjectId: selectedSubjectId, ts: qrTs, exp: qrTs + QR_VALIDITY_MS })}
                 size={width * 0.55}
                 color={BRAND.text}
                 backgroundColor={BRAND.surface}

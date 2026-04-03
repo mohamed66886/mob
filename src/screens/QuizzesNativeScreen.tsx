@@ -9,7 +9,7 @@ import {
   RefreshControl,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useNavigation } from "@react-navigation/native";
+import { useFocusEffect, useNavigation } from "@react-navigation/native";
 import {
   ClipboardCheck,
   CheckCircle,
@@ -38,6 +38,9 @@ interface Quiz {
   description: string;
   time_limit_minutes: number;
   status: string;
+  start_time?: string | null;
+  deadline?: string | null;
+  availability_status?: "upcoming" | "open" | "closed";
   student_status: "pending" | "in_progress" | "submitted";
   score: number | null;
 }
@@ -100,12 +103,38 @@ export default function QuizzesNativeScreen({
     fetchData();
   }, [token]);
 
+  useFocusEffect(
+    React.useCallback(() => {
+      fetchData();
+    }, [token, user?.role])
+  );
+
   const onRefresh = () => {
     setRefreshing(true);
     fetchData();
   };
 
-  const getStatusBadge = (studentStatus: string, score: number | null) => {
+  const getStatusBadge = (quiz: Quiz) => {
+    const studentStatus = quiz.student_status;
+    const score = quiz.score;
+
+    if (quiz.availability_status === "upcoming") {
+      return (
+        <View style={[styles.badge, { backgroundColor: BRAND.warning + "20" }]}> 
+          <Clock size={14} color="#d4a000" />
+          <Text style={[styles.badgeText, { color: "#d4a000" }]}>Not Started</Text>
+        </View>
+      );
+    }
+
+    if (quiz.availability_status === "closed" && studentStatus === "pending") {
+      return (
+        <View style={[styles.badge, { backgroundColor: BRAND.border }]}> 
+          <Text style={[styles.badgeText, { color: BRAND.textMuted }]}>Closed</Text>
+        </View>
+      );
+    }
+
     if (studentStatus === "submitted") {
       return (
         <View style={[styles.badge, { backgroundColor: BRAND.success + "20" }]}>
@@ -191,7 +220,7 @@ export default function QuizzesNativeScreen({
             >
               <View style={styles.cardHeader}>
                 <Text style={styles.quizTitle}>{q.title}</Text>
-                {getStatusBadge(q.student_status, q.score)}
+                {getStatusBadge(q)}
               </View>
               {q.description ? <Text style={styles.quizDesc}>{q.description}</Text> : null}
               

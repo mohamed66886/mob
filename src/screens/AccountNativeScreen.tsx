@@ -8,6 +8,7 @@ import {
   TextInput,
   ActivityIndicator,
   Alert,
+  KeyboardAvoidingView,
   Platform,
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
@@ -141,11 +142,13 @@ export default function AccountNativeScreen({ user, onLogout }: { user: User; on
   return (
     <View style={styles.screen}>
       <StatusBar style="dark" />
-      <ScrollView 
-        style={styles.scrollView} 
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={{ paddingTop: insets.top + 20, paddingBottom: insets.bottom + 100 }}
-      >
+      <KeyboardAvoidingView style={styles.keyboardView} behavior={Platform.OS === "ios" ? "padding" : "height"}>
+        <ScrollView
+          style={styles.scrollView}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+          contentContainerStyle={{ paddingTop: insets.top + 20, paddingBottom: insets.bottom + 100 }}
+        >
         
         {/* Profile Hero Section */}
         <Animated.View entering={FadeInDown.springify()} style={styles.headerSection}>
@@ -272,13 +275,15 @@ export default function AccountNativeScreen({ user, onLogout }: { user: User; on
           </Pressable>
         </Animated.View>
 
-      </ScrollView>
+        </ScrollView>
+      </KeyboardAvoidingView>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: BRAND.background },
+  keyboardView: { flex: 1 },
   scrollView: { flex: 1 },
 
   headerSection: { alignItems: "center", paddingBottom: 24 },
