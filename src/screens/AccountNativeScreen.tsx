@@ -95,7 +95,9 @@ function InfoItem({ icon, iconBg, label, value, hideBorder }: InfoItemProps) {
 
 export default function AccountNativeScreen({ user, onLogout }: { user: User; onLogout: () => Promise<void>; }) {
   const insets = useSafeAreaInsets();
-  const initials = `${user.name?.charAt(0).toUpperCase() || ""}`;
+  
+  const displayName = (user.name || "User").trim().split(/\s+/).slice(0, 3).join(" ");
+  const initials = `${displayName.charAt(0).toUpperCase() || ""}`;
   const avatarGradients = getAvatarGradients(user.name || "U");
 
   const [showPasswordForm, setShowPasswordForm] = useState(false);
@@ -155,7 +157,7 @@ export default function AccountNativeScreen({ user, onLogout }: { user: User; on
           <LinearGradient colors={avatarGradients} style={styles.largeAvatar}>
             <Text style={styles.largeAvatarText}>{initials}</Text>
           </LinearGradient>
-          <Text style={styles.profileName}>{user.name}</Text>
+          <Text style={styles.profileName}>{displayName}</Text>
           {student?.academic_code && (
             <View style={styles.badgeContainer}>
               <Fingerprint size={14} color={BRAND.primary} style={{ marginRight: 4 }} />

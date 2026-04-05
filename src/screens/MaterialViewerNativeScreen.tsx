@@ -9,6 +9,7 @@ import {
   AppStateStatus,
   Alert,
   ActivityIndicator,
+  Platform,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
@@ -74,10 +75,12 @@ export default function MaterialViewerNativeScreen({
     return `${api.defaults.baseURL}/materials/${materialId}/file`;
   })();
 
+  const safePdfUrl = resolvedUrl.includes("?") ? `${resolvedUrl}&ext=.pdf` : `${resolvedUrl}?ext=.pdf`;
+
   const pdfSource = {
-    uri: resolvedUrl,
+    uri: safePdfUrl,
     headers: { Authorization: `Bearer ${token}`, Accept: "application/pdf" },
-    cache: true,
+    cache: false,
   };
 
   // Watermark setup
@@ -391,7 +394,7 @@ export default function MaterialViewerNativeScreen({
           <Pdf
             source={pdfSource as any}
             style={styles.pdfView}
-            trustAllCerts={false}
+            trustAllCerts={Platform.OS === 'android'}
             onLoadComplete={(numberOfPages: number) => {
               setTotalPages(numberOfPages || 1);
               setIsLoading(false);
@@ -402,7 +405,7 @@ export default function MaterialViewerNativeScreen({
             onError={(error: unknown) => {
               console.log("PDF Load Error:", error);
               setIsLoading(false);
-              Alert.alert("Error", "Unable to load file securely.");
+              Alert.alert("Error", "Unable to load file securely. Please try again.");
             }}
           />
           

@@ -1,11 +1,10 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
-  Image,
   KeyboardAvoidingView,
+  Linking,
   Modal,
   Platform,
-  Pressable,
   SafeAreaView,
   ScrollView,
   StyleSheet,
@@ -19,17 +18,15 @@ import { CameraView, useCameraPermissions } from "expo-camera";
 import { Ionicons, MaterialCommunityIcons, Feather } from "@expo/vector-icons";
 
 const BRAND = {
-  primary: "#03468F",
-  primaryDark: "#023266",
-  primaryDimmed: "#E7EEF7",
-  secondary: "#FFE288",
-  background: "#F4F7FA", // لون أهدى للعين من الرمادي القديم
+  primary: "#007BFF",
+  primaryDimmed: "#E0E7FF",
+  background: "rgb(233, 236, 239)",
   surface: "#FFFFFF",
-  text: "#0F172A",
-  textMuted: "#64748B",
-  border: "#E2E8F0",
-  success: "#10B981",
-  danger: "#EF4444",
+  text: "#333333",
+  textMuted: "#666666",
+  border: "#D1D5DB",
+  success: "#28A745",
+  danger: "#FF0000",
 };
 
 const ALERT_DURATION = 4000;
@@ -75,7 +72,7 @@ function QrLoginScannerModal({
       const payload = parseQrLoginPayload(data);
 
       if (!payload) {
-        setError("Invalid QR code. Please scan valid login credentials.");
+        setError("Invalid QR code. Please scan valid student ID.");
         setTimeout(() => setIsProcessing(false), 1500);
         return;
       }
@@ -88,11 +85,11 @@ function QrLoginScannerModal({
   );
 
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <View style={styles.modalBackdrop}>
         <View style={styles.modalCard}>
           <View style={styles.modalHeaderRow}>
-            <Text style={styles.modalTitle}>Scan QR Code</Text>
+            <Text style={styles.modalTitle}>Scan Student ID</Text>
             <TouchableOpacity onPress={onClose} style={styles.modalCloseButton}>
               <Ionicons name="close" size={20} color={BRAND.text} />
             </TouchableOpacity>
@@ -154,31 +151,17 @@ export default function LoginNativeScreen({
     type: "error" | "success";
     message: string;
   } | null>(null);
-  const [progress, setProgress] = useState(100);
+
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
-    if (!alert) {
-      setProgress(100);
-      return;
-    }
-
-    setProgress(100);
-    const step = 100 / Math.max(1, Math.floor(ALERT_DURATION / 80));
-
-    intervalRef.current = setInterval(() => {
-      setProgress((prev) => Math.max(0, prev - step));
-    }, 80);
-
+    if (!alert) return;
     timeoutRef.current = setTimeout(() => {
       setAlert(null);
-      setProgress(100);
     }, ALERT_DURATION);
 
     return () => {
       if (timeoutRef.current) clearTimeout(timeoutRef.current);
-      if (intervalRef.current) clearInterval(intervalRef.current);
     };
   }, [alert]);
 
@@ -188,7 +171,7 @@ export default function LoginNativeScreen({
     if (!username.trim() || !password.trim()) {
       setAlert({
         type: "error",
-        message: "Please enter both username and password.",
+        message: "Please enter both student ID and password.",
       });
       return;
     }
@@ -206,7 +189,7 @@ export default function LoginNativeScreen({
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      <StatusBar style="light" />
+      <StatusBar style="dark" />
       
       <QrLoginScannerModal
         visible={showQrScanner}
@@ -214,7 +197,7 @@ export default function LoginNativeScreen({
         onScanned={(nextUsername, nextPassword) => {
           setUsername(nextUsername);
           setPassword(nextPassword);
-          setAlert({ type: "success", message: "QR credentials captured successfully." });
+          setAlert({ type: "success", message: "Student ID scanned successfully." });
         }}
       />
 
@@ -227,25 +210,25 @@ export default function LoginNativeScreen({
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
-          {/* Header Banner */}
-          <View style={styles.headerBanner}>
-            <View style={styles.blobRight} />
-            <View style={styles.blobLeft} />
-            <Image
-              source={require("../../assets/icon.png")}
-              style={styles.logo}
-              resizeMode="contain"
-            />
-          </View>
+          {/* Main Logo / Title outside the card */}
+          <Text style={styles.mainLogoText}>attendQr</Text>
 
-          {/* Main Login Card */}
-          <View style={styles.loginCard}>
-            
-            <View style={styles.cardHeader}>
-              <Text style={styles.welcomeTitle}>Welcome Back!</Text>
-              <Text style={styles.welcomeSubtitle}>Sign in to your account</Text>
+          <View style={styles.loginContainer}>
+            {/* Header Area */}
+            <View style={styles.headerArea}>
+              <Text style={styles.welcomeSubtitle}>Enter your credentials</Text>
+              
+              <TouchableOpacity 
+                style={styles.helpLink} 
+                activeOpacity={0.7}
+                onPress={() => Linking.openURL('https://wa.me/201062097359?text=' + encodeURIComponent('احتاج مساعده بخصوص attendqr'))}
+              >
+                <Ionicons name="help-circle" size={18} color="#007BFF" />
+                <Text style={styles.helpLinkText}>Need Help?</Text>
+              </TouchableOpacity>
             </View>
 
+            {/* Alert */}
             {!!alert && (
               <View
                 style={[
@@ -253,57 +236,41 @@ export default function LoginNativeScreen({
                   alert.type === "error" ? styles.alertError : styles.alertSuccess,
                 ]}
               >
-                <View style={styles.alertRow}>
-                  <Ionicons
-                    name={alert.type === "error" ? "alert-circle" : "checkmark-circle"}
-                    size={20}
-                    color="#fff"
-                  />
-                  <Text style={styles.alertText}>{alert.message}</Text>
-                  <Pressable
-                    onPress={() => {
-                      if (timeoutRef.current) clearTimeout(timeoutRef.current);
-                      if (intervalRef.current) clearInterval(intervalRef.current);
-                      setAlert(null);
-                      setProgress(100);
-                    }}
-                    hitSlop={8}
-                  >
-                    <Ionicons name="close" size={18} color="rgba(255,255,255,0.7)" />
-                  </Pressable>
-                </View>
-                <View style={styles.progressTrack}>
-                  <View style={[styles.progressFill, { width: `${progress}%` }]} />
-                </View>
+                <Ionicons
+                  name={alert.type === "error" ? "alert-circle" : "checkmark-circle"}
+                  size={18}
+                  color={alert.type === "error" ? BRAND.danger : BRAND.success}
+                />
+                <Text style={[
+                  styles.alertText,
+                  { color: alert.type === "error" ? BRAND.danger : BRAND.success }
+                ]}>
+                  {alert.message}
+                </Text>
               </View>
             )}
 
-            {/* Inputs */}
-            <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>Username</Text>
+            {/* Form Area */}
+            <View style={styles.formArea}>
               <View style={styles.inputContainer}>
-                <Feather name="user" size={18} color={BRAND.textMuted} style={styles.inputIcon} />
                 <TextInput
                   value={username}
                   onChangeText={setUsername}
                   autoCapitalize="none"
-                  placeholder="Enter your username"
-                  placeholderTextColor="#94A3B8"
+                  placeholder="Email or username"
+                  placeholderTextColor="#9CA3AF"
                   style={styles.input}
                   editable={!loading}
                 />
+                <Ionicons name="mail" size={20} color="#888888" style={styles.inputIcon} />
               </View>
-            </View>
 
-            <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>Password</Text>
               <View style={styles.inputContainer}>
-                <Feather name="lock" size={18} color={BRAND.textMuted} style={styles.inputIcon} />
                 <TextInput
                   value={password}
                   onChangeText={setPassword}
-                  placeholder="Enter your password"
-                  placeholderTextColor="#94A3B8"
+                  placeholder="Password"
+                  placeholderTextColor="#9CA3AF"
                   secureTextEntry={!showPassword}
                   style={styles.input}
                   editable={!loading}
@@ -311,17 +278,22 @@ export default function LoginNativeScreen({
                 <TouchableOpacity
                   onPress={() => setShowPassword((prev) => !prev)}
                   style={styles.passwordToggle}
+                  activeOpacity={0.7}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                 >
-                  <Feather
-                    name={showPassword ? "eye-off" : "eye"}
-                    size={18}
-                    color={BRAND.textMuted}
+                  <Ionicons
+                    name={showPassword ? "lock-open" : "lock-closed"}
+                    size={20}
+                    color="#888888"
+                    style={styles.inputIcon}
                   />
                 </TouchableOpacity>
               </View>
+
+
             </View>
 
-            {/* Primary Action */}
+            {/* Actions */}
             <TouchableOpacity
               onPress={handleSubmit}
               style={[styles.primaryButton, loading && styles.buttonDisabled]}
@@ -335,30 +307,20 @@ export default function LoginNativeScreen({
               )}
             </TouchableOpacity>
 
-            {/* Divider */}
-            <View style={styles.dividerRow}>
-              <View style={styles.dividerLine} />
-              <Text style={styles.dividerText}>OR</Text>
-              <View style={styles.dividerLine} />
-            </View>
-
-            {/* Secondary Action */}
             <TouchableOpacity
               onPress={() => setShowQrScanner(true)}
               style={styles.secondaryButton}
               activeOpacity={0.7}
             >
-              <MaterialCommunityIcons name="qrcode-scan" size={20} color={BRAND.primary} />
-              <Text style={styles.secondaryButtonText}>Login with QR Code</Text>
+              <Text style={styles.secondaryButtonText}>Scan QR Code</Text>
             </TouchableOpacity>
-          </View>
 
-          {/* Footer */}
-          <View style={styles.footer}>
-            <Text style={styles.footerText}>Designed & Developed by</Text>
-            <Text style={styles.companyText}>
-              Fulk Company <Text style={styles.footerMuted}>•</Text> Mohamad Rashad & Abdel-Hameed
-            </Text>
+            <View style={styles.supervisionContainer}>
+              <Text style={styles.supervisionText}>
+                Supervised by Dr. Mai Ramadan
+              </Text>
+            </View>
+
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
@@ -376,119 +338,95 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     flexGrow: 1,
+    paddingTop: 60,
     paddingBottom: 24,
+    paddingHorizontal: 24,
   },
-  headerBanner: {
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: BRAND.primary,
-    paddingTop: 40,
-    paddingBottom: 60,
-    position: "relative",
-    overflow: "hidden",
-  },
-  blobRight: {
-    position: "absolute",
-    right: -40,
-    top: -40,
-    width: 200,
-    height: 200,
-    borderRadius: 100,
-    backgroundColor: "rgba(255,255,255,0.08)",
-  },
-  blobLeft: {
-    position: "absolute",
-    left: -30,
-    bottom: -30,
-    width: 140,
-    height: 140,
-    borderRadius: 70,
-    backgroundColor: "rgba(255,255,255,0.08)",
-  },
-  logo: {
-    width: 120,
-    height: 120,
-    marginBottom: 10,
-  },
-  loginCard: {
-    backgroundColor: BRAND.surface,
-    borderRadius: 24,
-    marginHorizontal: 16,
-    marginTop: -30,
-    padding: 24,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.05,
-    shadowRadius: 20,
-    elevation: 4,
-  },
-  cardHeader: {
-    marginBottom: 24,
-    alignItems: "center",
-  },
-  welcomeTitle: {
-    fontSize: 24,
+  mainLogoText: {
+    fontSize: 28,
     fontWeight: "800",
-    color: BRAND.text,
-    marginBottom: 6,
+    color: "#2C3E50",
+    textAlign: "center",
+    marginBottom: 20,
+    letterSpacing: 1,
+  },
+  loginContainer: {
+    backgroundColor: BRAND.surface,
+    paddingVertical: 32,
+    paddingHorizontal: 24,
+    width: "100%",
+    maxWidth: 420,
+    alignSelf: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 5,
+    elevation: 2,
+  },
+  headerArea: {
+    alignItems: "center",
+    marginBottom: 24,
+  },
+  redNotice: {
+    color: BRAND.danger,
+    fontSize: 14,
+    fontWeight: "600",
+    textAlign: "center",
+    lineHeight: 24,
+    marginBottom: 16,
+    paddingHorizontal: 10,
   },
   welcomeSubtitle: {
-    fontSize: 14,
+    fontSize: 16,
     color: BRAND.textMuted,
+    marginBottom: 16,
+    fontWeight: "500",
+  },
+  helpLink: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  helpLinkText: {
+    color: BRAND.primary,
+    fontSize: 15,
+    fontWeight: "500",
   },
   alertBox: {
-    borderRadius: 12,
-    overflow: "hidden",
-    marginBottom: 20,
-  },
-  alertError: {
-    backgroundColor: BRAND.danger,
-  },
-  alertSuccess: {
-    backgroundColor: BRAND.success,
-  },
-  alertRow: {
     flexDirection: "row",
     alignItems: "center",
     padding: 12,
-    gap: 10,
+    borderRadius: 8,
+    marginBottom: 16,
+    gap: 8,
+  },
+  alertError: {
+    backgroundColor: "rgba(255, 0, 0, 0.1)",
+  },
+  alertSuccess: {
+    backgroundColor: "rgba(40, 167, 69, 0.1)",
   },
   alertText: {
     flex: 1,
     fontSize: 13,
-    fontWeight: "600",
-    color: "#fff",
+    fontWeight: "500",
   },
-  progressTrack: {
-    height: 3,
-    backgroundColor: "rgba(255,255,255,0.3)",
-  },
-  progressFill: {
-    height: "100%",
-    backgroundColor: "#fff",
-  },
-  inputGroup: {
-    marginBottom: 16,
-  },
-  inputLabel: {
-    fontSize: 13,
-    fontWeight: "600",
-    color: BRAND.text,
-    marginBottom: 8,
-    marginLeft: 4,
+  formArea: {
+    gap: 16,
+    marginBottom: 20,
   },
   inputContainer: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#F8FAFC",
+    backgroundColor: "#FFFFFF",
     borderWidth: 1,
     borderColor: BRAND.border,
-    borderRadius: 14,
+    borderRadius: 4,
     paddingHorizontal: 14,
-    height: 52,
+    height: 48,
   },
   inputIcon: {
-    marginRight: 10,
+    marginLeft: 10,
   },
   input: {
     flex: 1,
@@ -497,90 +435,99 @@ const styles = StyleSheet.create({
     height: "100%",
   },
   passwordToggle: {
-    padding: 8,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  recaptchaContainer: {
+    flexDirection: "row-reverse",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: "#FAFAFA",
+    borderWidth: 1,
+    borderColor: BRAND.border,
+    borderRadius: 4,
+    padding: 12,
+    marginTop: 4,
+  },
+  recaptchaLeft: {
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  recaptchaLabel: {
+    fontSize: 9,
+    color: "#555",
+    marginTop: 4,
+  },
+  recaptchaRight: {
+    flexDirection: "row-reverse",
+    alignItems: "center",
+    gap: 12,
+  },
+  recaptchaText: {
+    fontSize: 14,
+    color: BRAND.text,
+    fontWeight: "500",
+  },
+  recaptchaCheckbox: {
+    width: 26,
+    height: 26,
+    borderWidth: 2,
+    borderColor: "#C1C1C1",
+    backgroundColor: "#FFF",
+    borderRadius: 2,
   },
   primaryButton: {
     backgroundColor: BRAND.primary,
-    borderRadius: 14,
-    height: 54,
+    borderRadius: 4,
+    height: 48,
     justifyContent: "center",
     alignItems: "center",
-    marginTop: 10,
-    shadowColor: BRAND.primary,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.2,
-    shadowRadius: 8,
-    elevation: 3,
+    marginBottom: 12,
   },
   primaryButtonText: {
     color: "#fff",
     fontSize: 16,
-    fontWeight: "700",
+    fontWeight: "600",
   },
   buttonDisabled: {
     opacity: 0.7,
   },
-  dividerRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginVertical: 20,
-  },
-  dividerLine: {
-    flex: 1,
-    height: 1,
-    backgroundColor: BRAND.border,
-  },
-  dividerText: {
-    marginHorizontal: 12,
-    color: BRAND.textMuted,
-    fontSize: 12,
-    fontWeight: "600",
-  },
   secondaryButton: {
-    flexDirection: "row",
-    backgroundColor: BRAND.primaryDimmed,
-    borderRadius: 14,
-    height: 54,
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: BRAND.success,
+    borderRadius: 4,
+    height: 48,
     justifyContent: "center",
     alignItems: "center",
-    gap: 10,
   },
   secondaryButtonText: {
-    color: BRAND.primary,
-    fontSize: 15,
-    fontWeight: "700",
+    color: BRAND.success,
+    fontSize: 16,
+    fontWeight: "600",
   },
-  footer: {
-    marginTop: "auto",
-    paddingTop: 30,
+  supervisionContainer: {
+    marginTop: 24,
     alignItems: "center",
   },
-  footerText: {
-    fontSize: 12,
-    color: BRAND.textMuted,
-    marginBottom: 4,
-  },
-  companyText: {
+  supervisionText: {
     fontSize: 13,
-    fontWeight: "700",
-    color: BRAND.text,
-  },
-  footerMuted: {
     color: BRAND.textMuted,
+    textAlign: "center",
     fontWeight: "400",
   },
   modalBackdrop: {
     flex: 1,
-    backgroundColor: "rgba(15, 23, 42, 0.7)", // لون أغمق شوية للفوكس
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
     justifyContent: "center",
     alignItems: "center",
     padding: 20,
   },
   modalCard: {
     backgroundColor: BRAND.surface,
-    borderRadius: 24,
+    borderRadius: 20,
     width: "100%",
-    maxWidth: 380,
+    maxWidth: 360,
     overflow: "hidden",
     paddingBottom: 20,
   },
@@ -595,29 +542,23 @@ const styles = StyleSheet.create({
   },
   modalTitle: {
     fontSize: 16,
-    fontWeight: "700",
+    fontWeight: "600",
     color: BRAND.text,
   },
   modalCloseButton: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: BRAND.background,
-    alignItems: "center",
-    justifyContent: "center",
+    padding: 4,
   },
   centerContent: {
     padding: 40,
     alignItems: "center",
   },
   scannerCard: {
-    height: 300,
+    height: 280,
     marginHorizontal: 20,
     marginTop: 20,
     borderRadius: 16,
     overflow: "hidden",
     backgroundColor: "#000",
-    position: "relative",
   },
   cameraView: {
     flex: 1,
@@ -628,12 +569,12 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   scannerTarget: {
-    width: 200,
-    height: 200,
+    width: 180,
+    height: 180,
     borderWidth: 2,
     borderColor: BRAND.success,
     borderRadius: 12,
-    backgroundColor: "rgba(16, 185, 129, 0.1)",
+    backgroundColor: "rgba(16, 185, 129, 0.15)",
   },
   pageSubtitle: {
     fontSize: 14,
@@ -644,13 +585,14 @@ const styles = StyleSheet.create({
   refreshBtn: {
     backgroundColor: BRAND.primary,
     borderRadius: 12,
-    paddingVertical: 12,
-    paddingHorizontal: 20,
-    marginTop: 20,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    marginTop: 16,
   },
   refreshBtnText: {
     color: "#fff",
-    fontWeight: "700",
+    fontSize: 14,
+    fontWeight: "600",
   },
   errorContainer: {
     flexDirection: "row",

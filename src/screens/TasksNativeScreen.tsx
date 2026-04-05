@@ -15,7 +15,9 @@ import {
   AppStateStatus,
 } from "react-native";
 import { WebView } from "react-native-webview";
-import RNFetchBlob from "rn-fetch-blob";
+import * as FileSystem from "expo-file-system/legacy";
+import * as Sharing from "expo-sharing";
+import * as IntentLauncher from "expo-intent-launcher";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
 import * as DocumentPicker from "expo-document-picker";
@@ -273,34 +275,45 @@ export default function TasksNativeScreen({ token, user }: { token: string; user
     try {
       const guessedExt = getFileExtensionFromUrl(url) || "bin";
       const mimeByExt = getMimeByExtension(guessedExt);
-      const targetPath = `${RNFetchBlob.fs.dirs.DocumentDir}/task_${Date.now()}.${guessedExt}`;
+      const targetPath = `${FileSystem.documentDirectory}task_${Date.now()}.${guessedExt}`;
 
-      const response = await RNFetchBlob.config({
-        fileCache: true,
-        path: targetPath,
-      }).fetch("GET", url, {
-        Authorization: `Bearer ${token}`,
-      });
+      const { uri, status, headers } = await FileSystem.downloadAsync(
+        url,
+        targetPath,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
 
-      const info = response.info();
-      if (info.status >= 400) {
+      if (status >= 400) {
         Alert.alert("Error", "Could not download the task file");
         return;
       }
 
-      const downloadedPath = response.path();
       const headerMime =
-        info?.headers?.["Content-Type"] ||
-        info?.headers?.["content-type"] ||
+        headers?.["Content-Type"] ||
+        headers?.["content-type"] ||
         mimeByExt;
 
       if (Platform.OS === "android") {
-        await RNFetchBlob.android.actionViewIntent(downloadedPath, headerMime);
+        try {
+          const contentUri = await FileSystem.getContentUriAsync(uri);
+          await IntentLauncher.startActivityAsync("android.intent.action.VIEW", {
+            data: contentUri,
+            flags: 1,
+            type: headerMime,
+          });
+        } catch {
+          Alert.alert("Error", "No available app to open this file format");
+        }
         return;
       }
 
-      await RNFetchBlob.ios.openDocument(downloadedPath);
-    } catch {
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(uri, { UTI: headerMime });
+      } else {
+        Alert.alert("Error", "Sharing is not available on this device");
+      }
+    } catch (e) {
+      console.log(e);
       Alert.alert("Error", "Failed to open file");
     }
   }, [token]);

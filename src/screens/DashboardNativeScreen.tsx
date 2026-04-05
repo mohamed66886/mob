@@ -11,9 +11,11 @@ import {
   Image,
   FlatList,
   RefreshControl,
+  ScrollView,
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { BlurView } from "expo-blur";
+import { LineChart } from "react-native-chart-kit";
 import BottomSheet from "@gorhom/bottom-sheet";
 import { LinearGradient } from "expo-linear-gradient";
 import Animated, {
@@ -82,7 +84,7 @@ type StudentAttendanceRow = {
 };
 
 // ==========================================
-// 1. Animated Progress Bar
+// 1. Animated Progress Bar (List items)
 // ==========================================
 function AnimatedProgressBar({ percentage, color }: { percentage: number; color: string }) {
   const width = useSharedValue(0);
@@ -103,7 +105,70 @@ function AnimatedProgressBar({ percentage, color }: { percentage: number; color:
 }
 
 // ==========================================
-// 2. Hero Slider (Carousel)
+// 2. Flowing Wave Line Chart
+// ==========================================
+function AttendanceBarChart({ data }: { data: StudentAttendanceRow[] }) {
+  if (!data || data.length === 0) return null;
+
+  const labels = data.map((item) => item.name.split(" ")[0].substring(0, 10));
+  const percentages = data.map((item) => item.attendance_percentage);
+
+  return (
+    <Animated.View entering={FadeInDown.delay(250).springify()} style={[styles.cardShadow, styles.chartWrapper]}>
+      <Text style={styles.chartTitle}>Attendance Overview</Text>
+
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} nestedScrollEnabled>
+        <LineChart
+          data={{
+            labels: labels.length > 0 ? labels : ["No data"],
+            datasets: [
+              {
+                data: percentages.length > 0 ? percentages : [0],
+                strokeWidth: 3,
+              },
+            ],
+          }}
+          width={Math.max(SCREEN_WIDTH - 80, labels.length * 70)}
+          height={200}
+          yAxisLabel=""
+          yAxisSuffix="%"
+          withInnerLines={false}
+          withOuterLines={false}
+          fromZero
+          chartConfig={{
+            backgroundColor: BRAND.surface,
+            backgroundGradientFrom: BRAND.surface,
+            backgroundGradientTo: BRAND.surface,
+            decimalPlaces: 0,
+            fillShadowGradientFrom: BRAND.primary,
+            fillShadowGradientFromOpacity: 0.3,
+            fillShadowGradientTo: BRAND.primary,
+            fillShadowGradientToOpacity: 0,
+            color: (opacity = 1) => `rgba(51, 144, 236, ${opacity})`,
+            labelColor: (opacity = 1) => `rgba(142, 142, 147, ${opacity})`,
+            style: {
+              borderRadius: 16,
+            },
+            propsForDots: {
+              r: "5",
+              strokeWidth: "2",
+              stroke: BRAND.surface,
+            },
+          }}
+          bezier
+          style={{
+            marginVertical: 4,
+            borderRadius: 16,
+          }}
+        />
+      </ScrollView>
+    </Animated.View>
+  );
+}
+
+
+// ==========================================
+// 3. Hero Slider (Carousel)
 // ==========================================
 const SLIDER_DATA = [
   { id: "1", image: "https://scontent.fcai19-12.fna.fbcdn.net/v/t39.30808-6/641274873_1370114118495356_2944264532323131114_n.jpg?_nc_cat=110&ccb=1-7&_nc_sid=13d280&_nc_ohc=leOoOfY-7psQ7kNvwFV_P2w&_nc_oc=Adq16OMWqI-htap3IdFKxH4wXeIuxG8oeBLf3Q2tA2xANGau2ZLK4PK9x8CMPIbV608&_nc_zt=23&_nc_ht=scontent.fcai19-12.fna&_nc_gid=buYsgyl-9pYT0yC0f7yxyQ&_nc_ss=7a3a8&oh=00_Af2L-_RM8pRuSGMErosPogHJoKVWGq_vENnq5CuRMuUYDA&oe=69D52419", title: "Welcome to Campus" },
@@ -176,7 +241,7 @@ function HeroSlider({ scrollY }: { scrollY: SharedValue<number> }) {
 }
 
 // ==========================================
-// 3. Action Card Component
+// 4. Action Card Component
 // ==========================================
 function ActionCard({ item, onOpenScreen }: any) {
   const scale = useSharedValue(1);
@@ -185,7 +250,7 @@ function ActionCard({ item, onOpenScreen }: any) {
   return (
     <AnimatedPressable 
       style={[styles.actionCard, animatedStyle]}
-      onPressIn={() => (scale.value = withSpring(0.9))}
+      onPressIn={() => (scale.value = withSpring(0.94))}
       onPressOut={() => (scale.value = withSpring(1))}
       onPress={() => {
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -193,7 +258,7 @@ function ActionCard({ item, onOpenScreen }: any) {
       }}
     >
       <View style={[styles.actionIconContainer, { backgroundColor: `${item.color}15` }]}>
-        <item.icon color={item.color} size={26} strokeWidth={2.5} />
+        <item.icon color={item.color} size={28} strokeWidth={2.5} />
       </View>
       <Text style={styles.actionLabel}>{item.label}</Text>
     </AnimatedPressable>
@@ -201,7 +266,7 @@ function ActionCard({ item, onOpenScreen }: any) {
 }
 
 // ==========================================
-// 4. Student Dashboard Component
+// 5. Student Dashboard Component
 // ==========================================
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
@@ -227,8 +292,8 @@ function StudentDashboard({ subjects, loading, onOpenScreen }: { subjects: Stude
   return (
     <View style={styles.sectionContainer}>
       
-      {/* Quick Actions */}
-      <Animated.View entering={FadeInDown.delay(200).springify()} style={[styles.actionCardsRow, { flexWrap: "wrap", justifyContent: "flex-start", gap: 8 }]}>
+      {/* Quick Actions (Modern Grid Tile Layout) */}
+      <Animated.View entering={FadeInDown.delay(150).springify()} style={styles.actionCardsRow}>
         {[
           { id: 'QR', icon: QrCode, label: 'QR', color: '#ff6b6b' },
           { id: 'Materials', icon: BookOpen, label: 'Materials', color: '#5f27cd' },
@@ -242,7 +307,7 @@ function StudentDashboard({ subjects, loading, onOpenScreen }: { subjects: Stude
       </Animated.View>
 
       {/* Stats Group */}
-      <Animated.View entering={FadeInDown.delay(300).springify()} style={[styles.cardShadow, styles.statsWrapper]}>
+      <Animated.View entering={FadeInDown.delay(200).springify()} style={[styles.cardShadow, styles.statsWrapper]}>
         <View style={styles.statRow}>
           <View style={styles.statBox}>
             <BookMarked color={BRAND.primary} size={26} strokeWidth={2} />
@@ -264,10 +329,13 @@ function StudentDashboard({ subjects, loading, onOpenScreen }: { subjects: Stude
         </View>
       </Animated.View>
 
-      <Animated.Text entering={FadeIn.delay(400)} style={styles.sectionTitle}>Subject Attendance</Animated.Text>
+      {/* Embedded Bar Chart */}
+      <AttendanceBarChart data={subjects} />
+
+      <Animated.Text entering={FadeIn.delay(300)} style={styles.sectionTitle}>Detailed Breakdown</Animated.Text>
       
       {subjects.length === 0 ? (
-        <Animated.View entering={FadeIn.delay(500)} style={styles.emptyContainer}>
+        <Animated.View entering={FadeIn.delay(400)} style={styles.emptyContainer}>
           {Platform.OS !== "web" ? (
             <LottieView source={{ uri: "https://lottie.host/1ad3af53-f54a-486a-bcf7-9aea0a0f697c/yF4Hsho8pN.json" }} autoPlay loop style={{ width: 180, height: 180 }} />
           ) : (
@@ -276,7 +344,7 @@ function StudentDashboard({ subjects, loading, onOpenScreen }: { subjects: Stude
           <Text style={styles.emptyText}>No enrolled subjects yet.</Text>
         </Animated.View>
       ) : (
-        <Animated.View entering={FadeInDown.delay(500).springify()} style={[styles.cardShadow, styles.listGroup]}>
+        <Animated.View entering={FadeInDown.delay(400).springify()} style={[styles.cardShadow, styles.listGroup]}>
           {subjects.map((s: StudentAttendanceRow, index: number) => {
             const pct = s.attendance_percentage;
             const barColor = pct >= 75 ? BRAND.success : pct >= 50 ? BRAND.warning : BRAND.danger;
@@ -314,7 +382,7 @@ function StudentDashboard({ subjects, loading, onOpenScreen }: { subjects: Stude
 // ==========================================
 export default function DashboardNativeScreen({ token, user }: { token: string; user: User }) {
   const navigation = useNavigation<any>();
-  const insets = useSafeAreaInsets(); // Accurately account for the safe area insets
+  const insets = useSafeAreaInsets();
   const scrollY = useSharedValue(0);
   const [refreshing, setRefreshing] = useState(false);
   const [studentSubjects, setStudentSubjects] = useState<any[]>([]);
@@ -363,12 +431,23 @@ export default function DashboardNativeScreen({ token, user }: { token: string; 
   });
 
   const headerStyle = useAnimatedStyle(() => ({
-    height: interpolate(scrollY.value, [0, 100], [100 + insets.top, 60 + insets.top], Extrapolation.CLAMP),
-    paddingTop: insets.top,
+    paddingTop: insets.top + 10,
+    paddingBottom: interpolate(scrollY.value, [0, 60], [14, 10], Extrapolation.CLAMP),
   }));
 
   const titleStyle = useAnimatedStyle(() => ({
-    opacity: interpolate(scrollY.value, [0, 50], [1, 0], Extrapolation.CLAMP),
+    opacity: interpolate(scrollY.value, [0, 60], [1, 0.4], Extrapolation.CLAMP),
+    transform: [
+      { scale: interpolate(scrollY.value, [0, 60], [1, 0.95], Extrapolation.CLAMP) },
+      { translateX: interpolate(scrollY.value, [0, 60], [0, -10], Extrapolation.CLAMP) }
+    ]
+  }));
+
+  const logoStyle = useAnimatedStyle(() => ({
+    transform: [
+      { scale: interpolate(scrollY.value, [0, 60], [1, 0.85], Extrapolation.CLAMP) },
+      { translateY: interpolate(scrollY.value, [0, 60], [0, 4], Extrapolation.CLAMP) }
+    ]
   }));
 
   const displayName = useMemo(() => {
@@ -391,19 +470,17 @@ export default function DashboardNativeScreen({ token, user }: { token: string; 
       {/* Animated Header with Safe Area */}
       <Animated.View style={[styles.heroHeader, headerStyle]}>
         <BlurView intensity={Platform.OS === 'ios' ? 70 : 100} tint="light" style={StyleSheet.absoluteFill} />
-        <View style={styles.heroNameBlock}>
-          <View style={styles.greetingRow}>
-            <Text style={styles.greetingText}>Welcome</Text>
-            <Smile color={BRAND.primary} size={18} strokeWidth={2.5} />
-          </View>
-          <Animated.Text style={[styles.heroTitle, titleStyle]} numberOfLines={1}>
-            {displayName}
-          </Animated.Text>
-          <Animated.Text style={[styles.collegeText, titleStyle]} numberOfLines={1}>
+        
+        <Animated.View style={[styles.heroNameBlock, titleStyle]}>
+          <Text style={styles.heroTitle} numberOfLines={1}>
+            Hello, {displayName} 👋
+          </Text>
+          <Text style={styles.collegeText} numberOfLines={1}>
             {user?.college_name || "AttendQR System"}
-          </Animated.Text>
-        </View>
-        <View style={styles.logoContainer}>
+          </Text>
+        </Animated.View>
+
+        <Animated.View style={[styles.logoContainer, logoStyle]}>
           <View style={styles.logosStack}>
             {collegeLogoUri ? (
               <Image source={{ uri: collegeLogoUri }} style={styles.institutionLogo} />
@@ -416,13 +493,13 @@ export default function DashboardNativeScreen({ token, user }: { token: string; 
               </View>
             )}
           </View>
-        </View>
+        </Animated.View>
       </Animated.View>
 
       <Animated.ScrollView
         onScroll={onScroll}
         scrollEventThrottle={16}
-        contentContainerStyle={{ paddingTop: insets.top + 110, paddingBottom: 100 }} // Dynamic padding
+        contentContainerStyle={{ paddingTop: insets.top + 110, paddingBottom: 100 }}
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={BRAND.primary} />}
       >
@@ -487,10 +564,31 @@ const styles = StyleSheet.create({
   emptyContainer: { alignItems: "center", marginTop: 20 },
   emptyText: { marginTop: -10, fontSize: 16, color: BRAND.textMuted, fontWeight: "600" },
 
-  actionCardsRow: { flexDirection: "row", marginBottom: 24 },
-  actionCard: { alignItems: "center", width: "30%", marginBottom: 12 },
-  actionIconContainer: { width: 56, height: 56, borderRadius: 18, justifyContent: "center", alignItems: "center", marginBottom: 8 },
-  actionLabel: { fontSize: 12, fontWeight: "700", color: BRAND.textMuted },
+  actionCardsRow: { 
+    flexDirection: "row", 
+    flexWrap: "wrap", 
+    justifyContent: "space-between", 
+    marginBottom: 20,
+    paddingHorizontal: 2
+  },
+  actionCard: { 
+    alignItems: "center", 
+    justifyContent: "center",
+    width: "31%", 
+    backgroundColor: BRAND.surface,
+    paddingVertical: 18,
+    borderRadius: 20,
+    marginBottom: 14,
+    shadowColor: '#000', 
+    shadowOffset: { width: 0, height: 4 }, 
+    shadowOpacity: 0.04, 
+    shadowRadius: 10, 
+    elevation: 2,
+    borderWidth: 1,
+    borderColor: 'rgba(0,0,0,0.02)'
+  },
+  actionIconContainer: { width: 56, height: 56, borderRadius: 18, justifyContent: "center", alignItems: "center", marginBottom: 12 },
+  actionLabel: { fontSize: 13, fontWeight: "700", color: BRAND.textMuted },
 
   cardShadow: {
     backgroundColor: BRAND.surface, borderRadius: 20,
@@ -498,16 +596,66 @@ const styles = StyleSheet.create({
   },
 
   sectionContainer: { paddingHorizontal: 20, gap: 16 },
-  sectionTitle: { fontSize: 18, fontWeight: "800", color: BRAND.text, marginTop: 12, marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.5 },
+  sectionTitle: { fontSize: 18, fontWeight: "800", color: BRAND.text, marginTop: 16, marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.5 },
   
-  statsWrapper: { overflow: "hidden", marginBottom: 12 },
-  statRow: { flexDirection: "row", alignItems: "center", paddingVertical: 16 },
+  statsWrapper: { overflow: "hidden", marginBottom: 16, borderWidth: 1, borderColor: BRAND.border },
+  statRow: { flexDirection: "row", alignItems: "center", paddingVertical: 18 },
   statBox: { flex: 1, alignItems: "center" },
   statDivider: { width: 1, height: 40, backgroundColor: BRAND.border },
   statValue: { fontSize: 22, fontWeight: "800", color: BRAND.text, marginTop: 8 },
-  statLabel: { fontSize: 12, color: BRAND.textMuted, marginTop: 2, fontWeight: "600" },
+  statLabel: { fontSize: 12, color: BRAND.textMuted, marginTop: 4, fontWeight: "600" },
 
-  listGroup: { overflow: "hidden", padding: 6 },
+  /* Chart Styles */
+  chartWrapper: {
+    padding: 20,
+    marginBottom: 12,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(0,0,0,0.03)'
+  },
+  chartTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: BRAND.text,
+    marginBottom: 16,
+  },
+  chartScrollArea: {
+    flexDirection: "row",
+    alignItems: "flex-end",
+    paddingBottom: 10,
+    gap: 16,
+  },
+  chartColumn: {
+    alignItems: "center",
+    width: 60,
+  },
+  chartBarBackground: {
+    width: 24,
+    height: 140,
+    backgroundColor: BRAND.background,
+    borderRadius: 12,
+    justifyContent: "flex-end",
+    overflow: "hidden",
+    marginVertical: 10,
+  },
+  chartBarFill: {
+    width: "100%",
+    borderRadius: 12,
+  },
+  chartPctLabel: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: BRAND.text,
+  },
+  chartSubLabel: {
+    fontSize: 11,
+    fontWeight: "600",
+    color: BRAND.textMuted,
+    textAlign: "center",
+    maxWidth: 60,
+  },
+
+  listGroup: { overflow: "hidden", padding: 6, marginBottom: 20, borderWidth: 1, borderColor: 'rgba(0,0,0,0.03)' },
   listRow: { flexDirection: "row", alignItems: "center", padding: 14, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: BRAND.border },
   noBorder: { borderBottomWidth: 0 },
   listRowContent: { flex: 1, justifyContent: "center" },

@@ -2496,7 +2496,7 @@ export default function App() {
 
         <RootStack.Screen 
           name="QuizTaker" 
-          options={{ title: "Take Exam", headerBackVisible: false, gestureEnabled: false }}
+          options={{ title: "Take Exam", headerShown: false, headerBackVisible: false, gestureEnabled: false }}
         >
           {(props) => {
             const QuizTakerScreen = require("./src/screens/QuizTakerScreen").default;

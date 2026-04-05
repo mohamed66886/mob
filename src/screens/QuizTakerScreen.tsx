@@ -10,10 +10,12 @@ import {
   TextInput,
   KeyboardAvoidingView,
   Platform,
+  ScrollView,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRoute, useNavigation } from "@react-navigation/native";
-import { CheckCircle, Clock, AlertTriangle, ChevronLeft } from "lucide-react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { CheckCircle, Clock, AlertTriangle, ChevronLeft, Flag } from "lucide-react-native";
 
 import { api } from "../lib/api";
 import { User } from "../types/auth";
@@ -56,6 +58,7 @@ export default function QuizTakerScreen({
   
   const [quizDetails, setQuizDetails] = useState<any>(null);
   const [questions, setQuestions] = useState<Question[]>([]);
+  const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
 
   const [needsPassword, setNeedsPassword] = useState(false);
   const [accessPassword, setAccessPassword] = useState("");
@@ -71,8 +74,33 @@ export default function QuizTakerScreen({
 
   useEffect(() => {
     fetchQuizData();
-    return () => clearInterval(timerRef.current!);
+    // Do not clear interval based on quizId alone here because timer is dependent on status too
   }, [quizId]);
+
+  // Persistent storage for answers
+  useEffect(() => {
+    AsyncStorage.getItem(`quiz_${quizId}_answers`).then((data) => {
+      if (data) setAnswers(JSON.parse(data));
+    });
+  }, [quizId]);
+
+  useEffect(() => {
+    if (Object.keys(answers).length > 0) {
+      AsyncStorage.setItem(`quiz_${quizId}_answers`, JSON.stringify(answers));
+    }
+  }, [answers, quizId]);
+
+  // Prevent leaving exam screen
+  useEffect(() => {
+    const unsubscribe = navigation.addListener("beforeRemove", (e: any) => {
+      const isGoingBackToStart = e.data.action.type === 'GO_BACK';
+      if (status === "in_progress") {
+        e.preventDefault();
+        Alert.alert("Warning", "You cannot leave during the exam. Please submit first.");
+      }
+    });
+    return unsubscribe;
+  }, [navigation, status]);
 
   const applyQuizPayload = (data: any) => {
     setQuizDetails({
@@ -173,6 +201,8 @@ export default function QuizTakerScreen({
 
   useEffect(() => {
     if (status === "in_progress" && startedAt && quizDetails) {
+      if (timerRef.current) clearInterval(timerRef.current);
+
       timerRef.current = setInterval(() => {
         const now = new Date().getTime();
         const start = startedAt.getTime();
@@ -226,15 +256,22 @@ export default function QuizTakerScreen({
       applyQuizPayload(quizRes.data);
     } catch (err: any) {
       const errMsg = err?.response?.data?.error;
+      const resData = err?.response?.data;
+
       if (err?.response?.status === 403 && (errMsg === "Password required" || errMsg === "Invalid password")) {
         setNeedsPassword(true);
         Alert.alert("Password", errMsg === "Invalid password" ? "Incorrect password." : "Password is required.");
         return;
       }
-      if (err?.response?.data?.message === "Quiz already started") {
-        setStatus("in_progress");
-        // We'd need to fetch startedAt from somewhere if not returned. 
-        // Our backend actually supports returning it inside the error payload or success payload.
+
+      // Check if backend returns 'already started' either in standard error message or specifically format
+      if (resData?.message === "Quiz already started") {
+        if (resData.finishedAt) {
+          setStatus("submitted");
+        } else {
+          setStatus("in_progress");
+          if (resData.startedAt) setStartedAt(new Date(resData.startedAt));
+        }
       } else {
         Alert.alert("Error", err?.response?.data?.error || "Could not start quiz.");
       }
@@ -260,7 +297,7 @@ export default function QuizTakerScreen({
               text: "Submit", 
               style: "destructive", 
               onPress: () => {
-                executeSubmit();
+                executeSubmit(false);
                 resolve();
               } 
             }
@@ -268,18 +305,18 @@ export default function QuizTakerScreen({
         );
       });
     } else {
-      await executeSubmit();
+      await executeSubmit(false);
     }
   };
 
-  const executeSubmit = async () => {
+  const executeSubmit = async (isAuto = false) => {
     if (submitting) return;
     setSubmitting(true);
     
     // Format answers map to array
-    const answersArray = Object.keys(answers).map(qId => ({
+    const answersArray = Object.entries(answers).map(([qId, value]) => ({
       questionId: Number(qId),
-      selectedOptionIndex: answers[Number(qId)]
+      selectedOptionIndex: value,
     }));
 
     try {
@@ -288,8 +325,10 @@ export default function QuizTakerScreen({
       });
       setStatus("submitted");
       Alert.alert(
-        "Exam Submitted", 
-        `Submission successful. You scored ${res.data.score}/${res.data.total}.`,
+        isAuto ? "Time's Up!" : "Exam Submitted", 
+        isAuto 
+          ? `Your time expired and your exam was automatically submitted.\nYou scored ${res.data.score}/${res.data.total}.`
+          : `Submission successful. You scored ${res.data.score}/${res.data.total}.`,
         [{ text: "OK", onPress: () => navigation.goBack() }]
       );
     } catch (err: any) {
@@ -300,15 +339,14 @@ export default function QuizTakerScreen({
   };
 
   const handleAutoSubmit = () => {
-    Alert.alert("Time's Up!", "Your exam time has expired. Submitting automatically...", [
-      { text: "OK", onPress: () => executeSubmit() }
-    ]);
+    executeSubmit(true);
   };
 
-  const formatTime = (secs: number) => {
-    const m = Math.floor(secs / 60);
+  const formatFullTime = (secs: number) => {
+    const h = Math.floor(secs / 3600);
+    const m = Math.floor((secs % 3600) / 60);
     const s = secs % 60;
-    return `${m < 10 ? '0' : ''}${m}:${s < 10 ? '0' : ''}${s}`;
+    return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
   };
 
   if (loading || !quizDetails) {
@@ -386,68 +424,99 @@ export default function QuizTakerScreen({
   }
 
   // In Progress State
+  const q = questions[currentQuestionIndex];
+  const isLastQuestion = currentQuestionIndex === questions.length - 1;
+  const isFirstQuestion = currentQuestionIndex === 0;
+
   return (
     <SafeAreaView style={styles.screen} edges={["top", "bottom"]}>
       <View style={styles.examHeader}>
         <Text style={styles.examTitle} numberOfLines={1}>{quizDetails.title}</Text>
-        <View style={[
-          styles.timerBadge, 
-          timeRemainingSec !== null && timeRemainingSec < 60 && styles.timerDanger
-        ]}>
-          <Clock size={16} color={timeRemainingSec !== null && timeRemainingSec < 60 ? "#fff" : BRAND.text} />
-          <Text style={[
-            styles.timerText,
-            timeRemainingSec !== null && timeRemainingSec < 60 && { color: "#fff" }
-          ]}>
-            {timeRemainingSec !== null ? formatTime(timeRemainingSec) : "--:--"}
+        <View style={styles.timerBadge}>
+          <Text style={styles.timerLabelText}>Time left </Text>
+          <Text style={styles.timerText}>
+            {timeRemainingSec !== null 
+              ? formatFullTime(timeRemainingSec)
+              : "00:00:00"}
           </Text>
         </View>
       </View>
 
-      <FlatList
-        data={questions}
-        keyExtractor={(q) => q.id.toString()}
-        contentContainerStyle={styles.listContent}
-        renderItem={({ item: q, index }) => (
-          <View style={styles.questionCard}>
-            <View style={styles.qHeader}>
-               <View style={styles.qBadge}><Text style={styles.qBadgeText}>Q{index + 1}</Text></View>
-               <Text style={styles.qText}>{q.question_text}</Text>
+      <ScrollView style={styles.singleQuestionContent} contentContainerStyle={{ paddingBottom: 40 }}>
+        {q && (
+          <>
+            <View style={styles.questionMetaContainer}>
+              <Text style={styles.questionMetaTitle}>
+                Question <Text style={styles.questionMetaNumber}>{currentQuestionIndex + 1}</Text>
+              </Text>
+              <Text style={styles.questionMetaStatus}>
+                {answers[q.id] !== undefined ? "Answer saved" : "Not yet answered"}
+              </Text>
+              <Text style={styles.questionMetaPoints}>Marked out of 1.00</Text>
+              <Pressable style={styles.flagButton}>
+                <Flag size={14} color="#007bff" />
+                <Text style={styles.flagText}>Flag question</Text>
+              </Pressable>
             </View>
             
-            <View style={styles.optionsList}>
-               {q.options.map((opt, optIdx) => {
-                  const isSelected = answers[q.id] === optIdx;
-                  return (
-                    <Pressable
-                      key={optIdx}
-                      style={[styles.optionBtn, isSelected && styles.optionSelected]}
-                      onPress={() => handleAnswerSelect(q.id, optIdx)}
-                    >
-                      <View style={[styles.radioOuter, isSelected && styles.radioOuterSelected]}>
-                         {isSelected && <View style={styles.radioInner} />}
-                      </View>
-                      <Text style={[styles.optionText, isSelected && styles.optionTextSelected]}>{opt}</Text>
-                    </Pressable>
-                  );
-               })}
+            <View style={styles.questionBox}>
+              <Text style={styles.qTextMoodle}>{q.question_text}</Text>
+              
+              <Text style={styles.selectOneText}>Select one:</Text>
+              <View style={styles.optionsListMoodle}>
+                 {q.options.map((opt, optIdx) => {
+                    const isSelected = answers[q.id] === optIdx;
+                    const optionLabel = String.fromCharCode(97 + optIdx); // a, b, c, d
+                    return (
+                      <Pressable
+                        key={optIdx}
+                        style={styles.optionBtnMoodle}
+                        onPress={() => handleAnswerSelect(q.id, optIdx)}
+                      >
+                        <View style={[styles.moodleRadioOuter, isSelected && styles.moodleRadioOuterSelected]}>
+                           {isSelected && <View style={styles.moodleRadioInner} />}
+                        </View>
+                        <Text style={styles.optionLetterLabel}>{optionLabel}.</Text>
+                        <Text style={styles.optionTextMoodle}>{opt}</Text>
+                      </Pressable>
+                    );
+                 })}
+              </View>
             </View>
-          </View>
+          </>
         )}
-        ListFooterComponent={
+      </ScrollView>
+
+      <View style={styles.navigationFooter}>
+        <Pressable 
+          style={[styles.navBtn, isFirstQuestion && styles.navBtnDisabled]} 
+          disabled={isFirstQuestion}
+          onPress={() => setCurrentQuestionIndex(prev => prev - 1)}
+        >
+          <Text style={[styles.navBtnText, isFirstQuestion && styles.navBtnTextDisabled]}>Previous</Text>
+        </Pressable>
+
+        {isLastQuestion ? (
           <Pressable 
-            style={[styles.startBtn, submitting && { opacity: 0.7 }]} 
+            style={[styles.navBtn, submitting && { opacity: 0.7 }, { backgroundColor: BRAND.primary, borderColor: BRAND.primary }]} 
             onPress={() => submitQuiz(false)}
             disabled={submitting}
           >
              {submitting ? (
                <ActivityIndicator color="#fff" />
              ) : (
-               <Text style={styles.startBtnText}>Submit Exam</Text>
+               <Text style={[styles.navBtnText, { color: '#fff' }]}>Submit Exam</Text>
              )}
           </Pressable>
-        }
-      />
+        ) : (
+          <Pressable 
+            style={styles.navBtn} 
+            onPress={() => setCurrentQuestionIndex(prev => prev + 1)}
+          >
+            <Text style={styles.navBtnText}>Next</Text>
+          </Pressable>
+        )}
+      </View>
     </SafeAreaView>
   );
 }
@@ -534,55 +603,133 @@ const styles = StyleSheet.create({
   },
   examTitle: { flex: 1, fontSize: 18, fontWeight: "800", color: BRAND.text, paddingRight: 10 },
   timerBadge: {
-    flexDirection: "row", alignItems: "center", gap: 6,
-    backgroundColor: BRAND.background, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20,
+    flexDirection: "row", alignItems: "center",
+    backgroundColor: '#fff', paddingHorizontal: 12, paddingVertical: 8,
+    borderWidth: 1, borderColor: '#a52a2a',
   },
-  timerDanger: { backgroundColor: BRAND.danger },
-  timerText: { fontSize: 16, fontWeight: "800", color: BRAND.text, fontVariant: ["tabular-nums"] },
+  timerLabelText: { fontSize: 16, color: '#212529' },
+  timerText: { fontSize: 16, color: '#212529', fontVariant: ["tabular-nums"] },
 
-  listContent: { padding: 16, paddingBottom: 100 },
-  questionCard: {
-    backgroundColor: BRAND.surface,
-    padding: 20,
-    borderRadius: 16,
-    marginBottom: 16,
+  singleQuestionContent: {
+    padding: 16,
+    flex: 1,
+  },
+  questionMetaContainer: {
+    backgroundColor: '#fff',
     borderWidth: 1,
-    borderColor: BRAND.border,
+    borderColor: '#dee2e6',
+    borderTopLeftRadius: 4,
+    borderTopRightRadius: 4,
+    padding: 16,
   },
-  qHeader: { flexDirection: "row", alignItems: "flex-start", marginBottom: 20 },
-  qBadge: {
-    backgroundColor: BRAND.primary,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 8,
-    marginRight: 12,
-    marginTop: 2,
+  questionMetaTitle: {
+    fontSize: 16,
+    color: '#212529',
+    fontWeight: '700',
   },
-  qBadgeText: { color: "#fff", fontWeight: "800", fontSize: 12 },
-  qText: { flex: 1, fontSize: 17, fontWeight: "700", color: BRAND.text, lineHeight: 24 },
-  
-  optionsList: { gap: 10 },
-  optionBtn: {
+  questionMetaNumber: {
+    fontSize: 22,
+    fontWeight: '800',
+  },
+  questionMetaStatus: {
+    fontSize: 14,
+    color: '#212529',
+    marginTop: 12,
+  },
+  questionMetaPoints: {
+    fontSize: 14,
+    color: '#212529',
+    marginTop: 4,
+  },
+  flagButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 14,
+  },
+  flagText: {
+    color: '#007bff',
+    fontSize: 14,
+  },
+  questionBox: {
+    backgroundColor: '#eef4f5',
+    borderWidth: 1,
+    borderTopWidth: 0,
+    borderColor: '#dee2e6',
+    borderBottomLeftRadius: 8,
+    borderBottomRightRadius: 8,
+    padding: 24,
+    marginBottom: 20,
+  },
+  qTextMoodle: {
+    fontSize: 18,
+    color: '#212529',
+    lineHeight: 28,
+  },
+  selectOneText: {
+    fontSize: 15,
+    color: '#212529',
+    marginBottom: 12,
+    marginTop: 20,
+  },
+  optionsListMoodle: {
+    gap: 12,
+  },
+  optionBtnMoodle: {
     flexDirection: "row",
-    alignItems: "center",
-    padding: 14,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: BRAND.border,
-    backgroundColor: BRAND.background,
+    alignItems: "flex-start",
+    paddingVertical: 6,
   },
-  optionSelected: {
-    borderColor: BRAND.primary,
-    backgroundColor: BRAND.primary + "10",
-  },
-  radioOuter: {
-    width: 22, height: 22, borderRadius: 11,
-    borderWidth: 2, borderColor: "#c7c7cc",
+  moodleRadioOuter: {
+    width: 20, height: 20, borderRadius: 10,
+    borderWidth: 1, borderColor: "#495057",
     justifyContent: "center", alignItems: "center",
-    marginRight: 12,
+    marginRight: 8,
+    marginTop: 2,
+    backgroundColor: '#fff',
   },
-  radioOuterSelected: { borderColor: BRAND.primary },
-  radioInner: { width: 12, height: 12, borderRadius: 6, backgroundColor: BRAND.primary },
-  optionText: { flex: 1, fontSize: 16, color: BRAND.text, fontWeight: "500" },
-  optionTextSelected: { color: BRAND.primary, fontWeight: "700" },
+  moodleRadioOuterSelected: { borderColor: "#007bff", borderWidth: 2 },
+  moodleRadioInner: { width: 10, height: 10, borderRadius: 5, backgroundColor: "#007bff" },
+  optionLetterLabel: {
+    fontSize: 16,
+    color: '#212529',
+    marginRight: 8,
+    lineHeight: 24,
+  },
+  optionTextMoodle: {
+    flex: 1, 
+    fontSize: 16, 
+    color: '#212529',
+    lineHeight: 24,
+  },
+  navigationFooter: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    padding: 16,
+    borderTopWidth: 1,
+    borderTopColor: BRAND.border,
+    backgroundColor: '#fff',
+  },
+  navBtn: {
+    flex: 1,
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#adb5bd',
+    paddingVertical: 14,
+    borderRadius: 6,
+    alignItems: 'center',
+    marginHorizontal: 6,
+  },
+  navBtnDisabled: {
+    backgroundColor: '#f8f9fa',
+    borderColor: '#dee2e6',
+  },
+  navBtnText: {
+    color: '#212529',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  navBtnTextDisabled: {
+    color: '#adb5bd',
+  },
 });
