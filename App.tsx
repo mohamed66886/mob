@@ -84,6 +84,12 @@ try {
   // Fallback for Expo Go (native modules not available).
 }
 
+type NotificationsScreenProps = {
+  token: string;
+};
+
+const NotificationsNativeScreen = require("./src/screens/NotificationsNativeScreen").default as ComponentType<NotificationsScreenProps>;
+
 type PageItem = {
   key: string;
   title: string;
@@ -673,91 +679,6 @@ function TasksNativeScreen({ token }: { token: string }) {
             </Text>
           </View>
         )}
-      />
-    </SafeAreaView>
-  );
-}
-
-function NotificationsNativeScreen({ token }: { token: string }) {
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [items, setItems] = useState<any[]>([]);
-
-  const fetchNotifications = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await api.get("/notifications", authHeaders(token));
-      setItems(toArray(res.data));
-    } catch (err: any) {
-      setError(err?.response?.data?.error || "Failed to load notifications.");
-    } finally {
-      setLoading(false);
-    }
-  }, [token]);
-
-  useEffect(() => {
-    fetchNotifications();
-  }, [fetchNotifications]);
-
-  const markAsRead = useCallback(
-    async (id: number) => {
-      try {
-        await api.put(`/notifications/${id}/read`, {}, authHeaders(token));
-        setItems((prev) =>
-          prev.map((n) => (Number(n?.id) === Number(id) ? { ...n, is_read: 1 } : n)),
-        );
-      } catch {
-        // Keep UI stable if endpoint fails.
-      }
-    },
-    [token],
-  );
-
-  const markAllAsRead = useCallback(async () => {
-    try {
-      await api.put("/notifications/read-all", {}, authHeaders(token));
-      setItems((prev) => prev.map((n) => ({ ...n, is_read: 1 })));
-    } catch {
-      // Keep UI stable if endpoint fails.
-    }
-  }, [token]);
-
-  return (
-    <SafeAreaView style={styles.screen}>
-      <Text style={styles.screenTitle}>Notifications</Text>
-      <Text style={styles.subtitle}>Live notification center</Text>
-
-      <View style={styles.rowActions}>
-        <Pressable onPress={fetchNotifications} style={styles.refreshBtn}>
-          <Text style={styles.refreshBtnText}>Refresh</Text>
-        </Pressable>
-        <Pressable onPress={markAllAsRead} style={styles.secondaryBtn}>
-          <Text style={styles.secondaryBtnText}>Read All</Text>
-        </Pressable>
-      </View>
-
-      {loading ? <ActivityIndicator color={BRAND.primary} /> : null}
-      {error ? <Text style={styles.errorText}>{error}</Text> : null}
-
-      <FlatList
-        data={items}
-        keyExtractor={(item, idx) => String(item?.id || idx)}
-        contentContainerStyle={styles.listContent}
-        renderItem={({ item }) => {
-          const unread = !item?.is_read;
-          return (
-            <Pressable
-              onPress={() => unread && item?.id && markAsRead(item.id)}
-              style={[styles.pageCard, unread && styles.unreadCard]}
-            >
-              <Text style={styles.pageTitle}>{item?.title || "Notification"}</Text>
-              <Text style={styles.pageSubtitle}>
-                {item?.message || item?.content || "No message"}
-              </Text>
-            </Pressable>
-          );
-        }}
       />
     </SafeAreaView>
   );
@@ -2270,24 +2191,6 @@ export default function App() {
   useEffect(() => {
     if (!token || !user) return;
 
-    const parseMeta = (raw: any) => {
-      if (!raw) return {};
-      if (typeof raw === "object") return raw;
-      try {
-        return JSON.parse(String(raw));
-      } catch {
-        return {};
-      }
-    };
-
-    const isTaskOrMessageNotification = (item: any) => {
-      const meta = parseMeta(item?.meta);
-      const type = String(meta?.type || "").toLowerCase();
-      const nType = String(item?.notification_type || "").toLowerCase();
-      if (nType === "task") return true;
-      return ["message", "mention", "task", "submission"].includes(type);
-    };
-
     const refreshNotifications = async () => {
       try {
         const res = await api.get("/notifications", authHeaders(token));
@@ -2307,7 +2210,6 @@ export default function App() {
         const incoming = rows
           .filter((row: any) => Number(row?.id || 0) > Number(latestNotificationIdRef.current || 0))
           .filter((row: any) => !row?.is_read)
-          .filter(isTaskOrMessageNotification)
           .sort((a: any, b: any) => Number(a?.id || 0) - Number(b?.id || 0));
 
         latestNotificationIdRef.current = newestId;
