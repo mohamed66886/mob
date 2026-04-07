@@ -57,7 +57,7 @@ workflows:
       cocoapods: default
       vars:
         EAS_NO_VCS: "1"
-        BUNDLE_ID: com.anonymous.mobile
+        BUNDLE_ID: com.meqr.code
         XCODE_WORKSPACE: ios/mobile.xcworkspace
         XCODE_SCHEME: mobile
       groups:
