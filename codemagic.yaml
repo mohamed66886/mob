@@ -20,7 +20,7 @@ workflows:
 
     scripts:
       - name: Install dependencies
-        script: npm ci
+        script: npm install
 
       - name: Create runtime env file
         script: |
@@ -72,7 +72,7 @@ workflows:
 
     scripts:
       - name: Install dependencies
-        script: npm ci
+        script: npm install
 
       - name: Create runtime env file
         script: |
