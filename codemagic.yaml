@@ -9,6 +9,7 @@ workflows:
       node: 20
       vars:
         EAS_NO_VCS: "1"
+        EXPO_PUBLIC_API_URL: "https://attendqr.tech/api"
       groups:
         - mobile_env
 
@@ -25,10 +26,6 @@ workflows:
       - name: Create runtime env file
         script: |
           #!/usr/bin/env bash
-          if [ -z "$EXPO_PUBLIC_API_URL" ]; then
-            echo "EXPO_PUBLIC_API_URL is missing. Add it in Codemagic environment variables."
-            exit 1
-          fi
           printf "EXPO_PUBLIC_API_URL=%s\n" "$EXPO_PUBLIC_API_URL" > .env
 
       - name: Generate Android native project
@@ -57,6 +54,7 @@ workflows:
       cocoapods: default
       vars:
         EAS_NO_VCS: "1"
+        EXPO_PUBLIC_API_URL: "https://attendqr.tech/api"
         BUNDLE_ID: com.meqr.code
         XCODE_WORKSPACE: ios/mobile.xcworkspace
         XCODE_SCHEME: mobile
@@ -77,10 +75,6 @@ workflows:
       - name: Create runtime env file
         script: |
           #!/usr/bin/env bash
-          if [ -z "$EXPO_PUBLIC_API_URL" ]; then
-            echo "EXPO_PUBLIC_API_URL is missing. Add it in Codemagic environment variables."
-            exit 1
-          fi
           printf "EXPO_PUBLIC_API_URL=%s\n" "$EXPO_PUBLIC_API_URL" > .env
 
       - name: Generate iOS native project
