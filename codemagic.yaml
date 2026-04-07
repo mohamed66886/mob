@@ -52,6 +52,12 @@ workflows:
       node: 20
       xcode: latest
       cocoapods: default
+      # ✅ Correct Codemagic native signing — automatically fetches certificate
+      # and provisioning profile from Apple Developer Portal using the
+      # App Store Connect integration above. No manual keychain steps needed.
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: com.meqr.code
       vars:
         EAS_NO_VCS: "1"
         EXPO_PUBLIC_API_URL: "https://attendqr.tech/api"
@@ -60,7 +66,6 @@ workflows:
         XCODE_SCHEME: attendQr
       groups:
         - mobile_env
-        - ios_signing
 
     cache:
       cache_paths:
@@ -80,19 +85,17 @@ workflows:
       - name: Generate iOS native project
         script: npx expo prebuild --platform ios --non-interactive
 
-      - name: Patch iOS entitlements
+      - name: Patch iOS entitlements (remove aps-environment)
         script: |
           #!/usr/bin/env bash
-          # expo-notifications adds aps-environment to entitlements, which requires
-          # a Push Notifications-capable provisioning profile. We remove it here so
-          # the CI build succeeds with a standard profile.
-          # To re-enable: go to developer.apple.com → Identifiers → com.meqr.code
-          # → enable Push Notifications → re-run this build.
+          # expo-notifications adds aps-environment which requires a Push Notifications
+          # provisioning profile. Remove it so CI build succeeds with a standard profile.
+          # PERMANENT FIX: Enable Push Notifications on com.meqr.code in Apple Developer
+          # Portal → Identifiers, then delete this step.
           ENTITLEMENTS="ios/attendQr/attendQr.entitlements"
           if [ -f "$ENTITLEMENTS" ]; then
             /usr/libexec/PlistBuddy -c "Delete :aps-environment" "$ENTITLEMENTS" 2>/dev/null || true
             echo "✅ Patched entitlements — removed aps-environment"
-            cat "$ENTITLEMENTS"
           else
             echo "⚠️  Entitlements file not found at $ENTITLEMENTS"
           fi
@@ -102,18 +105,14 @@ workflows:
           cd ios
           pod install
 
-      - name: Configure iOS signing files
-        script: |
-          keychain initialize
-          app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create
-          xcode-project use-profiles
+      - name: Set up code signing
+        script: xcode-project use-profiles
 
       - name: Build iOS IPA
         script: |
           xcode-project build-ipa \
             --workspace "$XCODE_WORKSPACE" \
             --scheme "$XCODE_SCHEME" \
-            --archive-xcargs "COMPILER_INDEX_STORE_ENABLE=NO ALLOW_PROVISIONING_UPDATES=NO" \
             --remove-xcarchive
 
     artifacts:
