@@ -3,7 +3,7 @@ workflows:
     name: Mobile Android Release (Expo)
     max_build_duration: 60
     instance_type: mac_mini_m2
-    working_directory: mobile
+    working_directory: .
 
     environment:
       node: 20
