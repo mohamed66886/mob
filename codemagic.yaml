@@ -40,13 +40,12 @@ workflows:
 
     artifacts:
       - android/app/build/outputs/**/*.apk
-      - mobile/android/app/build/outputs/**/*.apk
 
   mobile_ios_release:
     name: Mobile iOS Release (Expo)
     max_build_duration: 90
     instance_type: mac_mini_m2
-    working_directory: mobile
+    working_directory: .
 
     integrations:
       app_store_connect: codemagic_app_store_connect
