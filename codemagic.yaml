@@ -80,6 +80,23 @@ workflows:
       - name: Generate iOS native project
         script: npx expo prebuild --platform ios --non-interactive
 
+      - name: Patch iOS entitlements
+        script: |
+          #!/usr/bin/env bash
+          # expo-notifications adds aps-environment to entitlements, which requires
+          # a Push Notifications-capable provisioning profile. We remove it here so
+          # the CI build succeeds with a standard profile.
+          # To re-enable: go to developer.apple.com → Identifiers → com.meqr.code
+          # → enable Push Notifications → re-run this build.
+          ENTITLEMENTS="ios/attendQr/attendQr.entitlements"
+          if [ -f "$ENTITLEMENTS" ]; then
+            /usr/libexec/PlistBuddy -c "Delete :aps-environment" "$ENTITLEMENTS" 2>/dev/null || true
+            echo "✅ Patched entitlements — removed aps-environment"
+            cat "$ENTITLEMENTS"
+          else
+            echo "⚠️  Entitlements file not found at $ENTITLEMENTS"
+          fi
+
       - name: Install CocoaPods
         script: |
           cd ios
