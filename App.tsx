@@ -32,8 +32,11 @@ import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import {
   api,
   getMe,
+  logRuntimeSecurityEvent,
+  refreshMobileAccessToken,
   login,
   registerDeviceToken,
+  setAccessToken,
   unregisterDeviceToken,
 } from "./src/lib/api";
 import {
@@ -43,8 +46,14 @@ import {
   upsertQueueItem,
 } from "./src/lib/offlineQueue";
 import { disconnectRealtimeSocket, getRealtimeSocket } from "./src/lib/realtime";
-import { clearToken, getToken, saveToken } from "./src/lib/tokenStorage";
+import {
+  clearRefreshToken,
+  getRefreshToken,
+  saveRefreshToken,
+} from "./src/lib/tokenStorage";
 import { appendReleaseLog, installGlobalErrorLogging } from "./src/lib/releaseLogger";
+import { evaluateRuntimeRisk, shouldEnforceRuntimeGuard } from "./src/lib/runtimeGuard";
+import { initializeTransportSecurity } from "./src/lib/transportSecurity";
 import { User, UserRole } from "./src/types/auth";
 import { ErrorBoundary } from "./src/components/ErrorBoundary";
 import DashboardNativeScreen from "./src/screens/DashboardNativeScreen";
@@ -2040,6 +2049,8 @@ function WorkspaceCallScreenGuard({
 }
 
 export default function App() {
+  const [runtimeBlocked, setRuntimeBlocked] = useState(false);
+  const [runtimeReasons, setRuntimeReasons] = useState<string[]>([]);
   const [isBooting, setIsBooting] = useState(true);
   const [isAuthLoading, setIsAuthLoading] = useState(false);
   const [token, setToken] = useState<string | null>(null);
@@ -2055,7 +2066,91 @@ export default function App() {
 
   useEffect(() => {
     installGlobalErrorLogging();
+
+    void (async () => {
+      const pinning = await initializeTransportSecurity();
+      if (!pinning.ok) {
+        const reasons = [
+          "TLS certificate/public-key pinning initialization failed.",
+          String(pinning.reason || "pinning_error"),
+        ];
+
+        setRuntimeBlocked(true);
+        setRuntimeReasons(reasons);
+        setIsBooting(false);
+
+        await appendReleaseLog("error", "transport security blocked app startup", {
+          reason: pinning.reason,
+        });
+
+        await logRuntimeSecurityEvent({
+          eventType: "transport_pinning_block",
+          severity: "critical",
+          message: "Pinning validation failed during startup",
+          metadata: {
+            reason: pinning.reason || "unknown",
+          },
+        });
+        return;
+      }
+
+      const risk = evaluateRuntimeRisk();
+      const enforceRuntimeGuard = shouldEnforceRuntimeGuard();
+      if (risk.level === "high" && enforceRuntimeGuard) {
+        setRuntimeBlocked(true);
+        setRuntimeReasons(risk.reasons);
+        setIsBooting(false);
+        await appendReleaseLog("warn", "runtime blocked due to high risk", risk);
+        await logRuntimeSecurityEvent({
+          eventType: "runtime_guard_block",
+          severity: "critical",
+          message: "Runtime guard blocked execution",
+          metadata: {
+            score: risk.score,
+            reasons: risk.reasons,
+          },
+        });
+      } else if (risk.level === "high") {
+        await appendReleaseLog("warn", "runtime high risk detected without block (dev/expo-go)", risk);
+      }
+    })();
   }, []);
+
+  useEffect(() => {
+    if (runtimeBlocked) {
+      return;
+    }
+
+    const timer = setInterval(() => {
+      const enforceRuntimeGuard = shouldEnforceRuntimeGuard();
+      if (!enforceRuntimeGuard) {
+        return;
+      }
+
+      const risk = evaluateRuntimeRisk();
+      if (risk.level !== "high") {
+        return;
+      }
+
+      setRuntimeBlocked(true);
+      setRuntimeReasons(risk.reasons);
+      setToken(null);
+      setUser(null);
+
+      void appendReleaseLog("warn", "runtime blocked during active session", risk);
+      void logRuntimeSecurityEvent({
+        eventType: "runtime_guard_block_post_start",
+        severity: "critical",
+        message: "Runtime guard blocked during active session",
+        metadata: {
+          score: risk.score,
+          reasons: risk.reasons,
+        },
+      });
+    }, 30000);
+
+    return () => clearInterval(timer);
+  }, [runtimeBlocked]);
 
   const showLiveBanner = useCallback((title: string, message: string) => {
     setLiveNotification({
@@ -2139,19 +2234,29 @@ export default function App() {
 
   const restoreSession = useCallback(async () => {
     try {
-      const savedToken = await getToken();
-
-      if (!savedToken) {
+      const savedRefreshToken = await getRefreshToken();
+      if (!savedRefreshToken) {
         setIsBooting(false);
         return;
       }
 
-      const me = await getMe(savedToken);
-      setToken(savedToken);
+      const restoredAccessToken = await refreshMobileAccessToken();
+      if (!restoredAccessToken) {
+        await clearRefreshToken();
+        setToken(null);
+        setUser(null);
+        setIsBooting(false);
+        return;
+      }
+
+      const me = await getMe(restoredAccessToken);
+      setAccessToken(restoredAccessToken);
+      setToken(restoredAccessToken);
       setUser(me);
     } catch (error) {
       appendReleaseLog("warn", "restoreSession failed", error);
-      await clearToken();
+      await clearRefreshToken();
+      setAccessToken(null);
       setToken(null);
       setUser(null);
     } finally {
@@ -2160,8 +2265,11 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (runtimeBlocked) {
+      return;
+    }
     restoreSession();
-  }, [restoreSession]);
+  }, [restoreSession, runtimeBlocked]);
 
   useEffect(() => {
     if (!token || !user) return;
@@ -2252,8 +2360,12 @@ export default function App() {
       if (!result?.token) {
         throw new Error("No auth token received from server");
       }
+      if (!result?.refreshToken) {
+        throw new Error("No refresh token received from server");
+      }
 
-      await saveToken(result.token);
+      await saveRefreshToken(result.refreshToken);
+      setAccessToken(result.token);
       setToken(result.token);
       
       // Fetch full user data with logos
@@ -2298,11 +2410,41 @@ export default function App() {
       pushTokenRef.current = null;
     }
 
+    const refreshToken = await getRefreshToken();
+    if (refreshToken) {
+      await api.post(
+        "/auth/logout",
+        { refreshToken },
+        { headers: { "x-client-platform": "mobile" } },
+      ).catch(() => {});
+    }
+
     disconnectRealtimeSocket();
-    await clearToken();
+    await clearRefreshToken();
+    setAccessToken(null);
     setToken(null);
     setUser(null);
   }, [token]);
+
+  if (runtimeBlocked) {
+    return (
+      <ErrorBoundary>
+        <SafeAreaView style={styles.runtimeBlockedWrap}>
+          <Text style={styles.runtimeBlockedTitle}>Security Protection Active</Text>
+          <Text style={styles.runtimeBlockedSubtitle}>
+            This device session was blocked because runtime integrity checks detected a high-risk environment.
+          </Text>
+          <View style={styles.runtimeReasonsWrap}>
+            {runtimeReasons.map((reason, index) => (
+              <Text key={`${reason}-${index}`} style={styles.runtimeReasonItem}>
+                {`- ${reason}`}
+              </Text>
+            ))}
+          </View>
+        </SafeAreaView>
+      </ErrorBoundary>
+    );
+  }
 
   if (isBooting) {
     return (
@@ -2472,6 +2614,42 @@ export default function App() {
 }
 
 const styles = StyleSheet.create({
+  runtimeBlockedWrap: {
+    flex: 1,
+    backgroundColor: BRAND.background,
+    paddingHorizontal: SCREEN_SIDE_PADDING,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  runtimeBlockedTitle: {
+    color: BRAND.danger,
+    fontSize: 28,
+    fontWeight: "800",
+    marginBottom: 10,
+    textAlign: "center",
+  },
+  runtimeBlockedSubtitle: {
+    color: BRAND.textMuted,
+    fontSize: 15,
+    lineHeight: 22,
+    textAlign: "center",
+    marginBottom: 18,
+  },
+  runtimeReasonsWrap: {
+    width: "100%",
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: BRAND.border,
+    backgroundColor: BRAND.surface,
+    padding: 14,
+    gap: 8,
+  },
+  runtimeReasonItem: {
+    color: BRAND.text,
+    fontSize: 13,
+    lineHeight: 20,
+    fontWeight: "500",
+  },
   unsupportedWrap: {
     flex: 1,
     backgroundColor: BRAND.background,

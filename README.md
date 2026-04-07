@@ -48,3 +48,27 @@ Then press:
 - Start with high-priority pages: Dashboard, Attendance, Lectures, Students
 - Add camera QR scanning and notifications
 - Add realtime workspace chat/calls
+
+## 4) Codemagic CI (Android + iOS)
+
+This repository now includes a root `codemagic.yaml` workflow:
+
+- Workflow name: `mobile_android_release`
+- Working directory: `mobile`
+- Output artifact: Android release APK
+- Workflow name: `mobile_ios_release`
+- Working directory: `mobile`
+- Output artifact: iOS IPA
+
+Before running the workflow in Codemagic, add environment variable:
+
+```env
+EXPO_PUBLIC_API_URL=https://attendqr.tech/api
+```
+
+You can also copy from `.env.example` inside this folder.
+
+For iOS workflow, also configure:
+
+- App Store Connect integration named `codemagic_app_store_connect`
+- Signing assets/profile access in environment group `ios_signing`

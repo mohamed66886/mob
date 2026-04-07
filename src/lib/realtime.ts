@@ -4,24 +4,34 @@ import { realtimeBaseURL } from "./api";
 class SocketManager {
   private static instance: SocketManager | null = null;
   public socket: Socket;
+  private authToken: string;
 
   private constructor(token: string) {
+    this.authToken = String(token || "").trim();
     this.socket = io(realtimeBaseURL, {
-      auth: { token },
-      transports: ["websocket"],
+      auth: { token: this.authToken },
       autoConnect: true,
       reconnection: true,
-      reconnectionAttempts: 5,
+      reconnectionAttempts: Infinity,
       reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
     });
 
     this.setupEventListeners();
   }
 
   public static getInstance(token: string): SocketManager {
+    const normalizedToken = String(token || "").trim();
+
     if (!SocketManager.instance) {
-      SocketManager.instance = new SocketManager(token);
+      SocketManager.instance = new SocketManager(normalizedToken);
+    } else if (
+      normalizedToken &&
+      SocketManager.instance.authToken !== normalizedToken
+    ) {
+      SocketManager.instance.refreshAuthToken(normalizedToken);
     }
+
     return SocketManager.instance;
   }
 
@@ -41,6 +51,23 @@ class SocketManager {
     this.socket.on("connect_error", (error) => {
       console.error("Socket connection error:", error);
     });
+  }
+
+  private refreshAuthToken(nextToken: string) {
+    this.authToken = nextToken;
+
+    this.socket.auth = {
+      ...(typeof this.socket.auth === "object" && this.socket.auth
+        ? this.socket.auth
+        : {}),
+      token: nextToken,
+    };
+
+    if (this.socket.connected) {
+      this.socket.disconnect();
+    }
+
+    this.socket.connect();
   }
 
   public static disconnect() {

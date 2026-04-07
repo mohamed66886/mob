@@ -316,9 +316,12 @@ export default function LoginNativeScreen({
             </TouchableOpacity>
 
             <View style={styles.supervisionContainer}>
-              <Text style={styles.supervisionText}>
-                Supervised by Dr. Mai Ramadan
-              </Text>
+              <View style={styles.creditRow}>
+   
+                <Text style={styles.supervisionText}>
+<Text style={styles.supervisionLabel}>Developed By:</Text> Mohamed Rashad                </Text>
+              </View>
+
             </View>
 
           </View>
@@ -338,8 +341,9 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     flexGrow: 1,
-    paddingTop: 60,
-    paddingBottom: 24,
+    justifyContent: "center",
+    alignItems: "center",
+    paddingVertical: 24,
     paddingHorizontal: 24,
   },
   mainLogoText: {
@@ -510,11 +514,24 @@ const styles = StyleSheet.create({
     marginTop: 24,
     alignItems: "center",
   },
+  creditRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 4,
+  },
+  creditIcon: {
+    marginRight: 6,
+  },
   supervisionText: {
     fontSize: 13,
     color: BRAND.textMuted,
     textAlign: "center",
     fontWeight: "400",
+  },
+  supervisionLabel: {
+    color: BRAND.text,
+    fontWeight: "600",
   },
   modalBackdrop: {
     flex: 1,

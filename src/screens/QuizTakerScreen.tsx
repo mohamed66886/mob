@@ -27,6 +27,10 @@ import {
 import { api } from "../lib/api";
 import { User } from "../types/auth";
 import { usePreventScreenCapture, addScreenshotListener } from "expo-screen-capture";
+import { createProctorSocketClient } from "../proctoring/socket";
+import { getSamplingIntervalMs, inferVisionEvents, shouldSampleFrame } from "../proctoring/rules";
+import { resolveOnDeviceVisionEngine } from "../proctoring/vision";
+import { ProctorDecision, ProctorEventType, ProctorRiskUpdate } from "../proctoring/types";
 
 async function getDeviceFingerprint(): Promise<string> {
   try {
@@ -52,16 +56,11 @@ const BRAND = {
   danger: "#ff3b30",
 };
 
-const RISK_AUTO_SUBMIT_THRESHOLD = 10;
-const RISK_SCORE_CAP = 100;
-const FACE_ANALYSIS_INTERVAL_MS = 2000;
-const AI_FRAME_INTERVAL_MS = 2500;
 const VOICE_ANALYSIS_INTERVAL_MS = 2500;
-const VOICE_METERING_THRESHOLD_DB = -35;
 const VOICE_SPEECH_MIN_DB = -30;
 const VOICE_SPEECH_MAX_DB = -10;
-const LOW_RISK_FRAME_COOLDOWN_MS = 6000;
 const MAX_ALLOWED_APP_EXITS = 2;
+const PROCTOR_HEARTBEAT_MS = 12000;
 
 interface Question {
   id: number;
@@ -172,20 +171,19 @@ export default function QuizTakerScreen({
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const [violations, setViolations] = useState(0);
-  const [aiViolations, setAiViolations] = useState(0);
   const [riskScore, setRiskScore] = useState(0);
-  const [frameAiRisk, setFrameAiRisk] = useState<number | null>(null);
+  const [warningThreshold, setWarningThreshold] = useState(10);
+  const [autoSubmitThreshold, setAutoSubmitThreshold] = useState(20);
+  const [socketConnected, setSocketConnected] = useState(false);
   const [voiceLevelDb, setVoiceLevelDb] = useState<number | null>(null);
-  const [faces, setFaces] = useState<any[]>([]);
-  const [noFaceCount, setNoFaceCount] = useState(0);
-  const [hasSeenFaceSignal, setHasSeenFaceSignal] = useState(false);
   const riskCooldownMapRef = useRef<Record<string, number>>({});
-  const didAutoSubmitForRiskRef = useRef(false);
-  const lastAutoSubmitAttemptAtRef = useRef(0);
+  const lastWarningAtRef = useRef(0);
   const cameraRef = useRef<any>(null);
-  const frameAnalysisBusyRef = useRef(false);
   const voiceAnalysisBusyRef = useRef(false);
+  const visionAnalysisBusyRef = useRef(false);
   const lastFrameAnalyzeAtRef = useRef(0);
+  const proctorClientRef = useRef(createProctorSocketClient(token));
+  const visionEngineRef = useRef(resolveOnDeviceVisionEngine());
 
   const [permission, requestPermission] = useCameraPermissions();
   const recorder = useAudioRecorder({
@@ -194,174 +192,91 @@ export default function QuizTakerScreen({
   });
   const appState = useRef(AppState.currentState);
 
-  const reportViolation = async (type: string) => {
-    try {
-      await api.post(`/quizzes/${quizId}/violation`, {
-        type,
-        timestamp: new Date().toISOString(),
-      }, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-    } catch (e) {
-      console.log("Violation report failed");
+  const applyRiskUpdate = (payload: ProctorRiskUpdate) => {
+    if (typeof payload?.risk_score === "number" && Number.isFinite(payload.risk_score)) {
+      setRiskScore(payload.risk_score);
+    }
+    if (
+      typeof payload?.warning_threshold === "number" &&
+      Number.isFinite(payload.warning_threshold)
+    ) {
+      setWarningThreshold(payload.warning_threshold);
+    }
+    if (
+      typeof payload?.auto_submit_threshold === "number" &&
+      Number.isFinite(payload.auto_submit_threshold)
+    ) {
+      setAutoSubmitThreshold(payload.auto_submit_threshold);
     }
   };
 
-  async function handleAutoSubmit(trigger = "RISK_THRESHOLD") {
-    if (status !== "in_progress" || submitting) return;
+  const emitProctorEvent = async (
+    event: ProctorEventType,
+    risk: number,
+    metadata?: Record<string, unknown>,
+  ) => {
+    const ack = await proctorClientRef.current.sendEvent({
+      event,
+      risk,
+      timestamp: new Date().toISOString(),
+      quizId: Number(quizId),
+      metadata,
+    });
 
-    const now = Date.now();
-    // Allow retrying auto-submit if backend asks to continue, but avoid spamming.
-    if (now - lastAutoSubmitAttemptAtRef.current < 8000) return;
-    lastAutoSubmitAttemptAtRef.current = now;
+    if (!ack.ok && __DEV__) {
+      console.log("Failed to emit proctor event", event, ack.message || "");
+    }
+  };
 
-    try {
-      const decisionRes = await api.post(
-        `/quizzes/${quizId}/risk/final-decision`,
-        {
-          trigger,
-          risk_score: riskScore,
-          frame_ai_risk: frameAiRisk,
-          voice_level_db: voiceLevelDb,
-          timestamp: new Date().toISOString(),
-        },
-        {
-          headers: { Authorization: `Bearer ${token}` },
-        },
-      );
+  const handleProctorDecision = (payload: ProctorDecision) => {
+    applyRiskUpdate(payload);
 
-      const shouldSubmit =
-        decisionRes?.data?.action === "submit" ||
-        decisionRes?.data?.force_submit === true;
-
-      if (!shouldSubmit) {
-        didAutoSubmitForRiskRef.current = false;
-        return;
-      }
-    } catch (err: any) {
-      // Fail-safe for environments where decision endpoint is not yet deployed.
-      if (err?.response?.status !== 404) {
-        console.log("Risk final decision unavailable", err?.response?.status || "");
-      }
+    if (payload.action === "FORCE_SUBMIT") {
+      void executeSubmit(true);
+      return;
     }
 
-    executeSubmit(true);
-  }
+    if (payload.action === "WARNING") {
+      const now = Date.now();
+      if (now - lastWarningAtRef.current < 12000) return;
+      lastWarningAtRef.current = now;
+      Alert.alert("Warning", "Suspicious behavior detected. Please focus on the exam.");
+    }
+  };
 
-  function addRisk(points: number, reason: string, cooldownMs = 3000) {
+  function addRisk(points: number, event: ProctorEventType, cooldownMs = 3000) {
     if (status !== "in_progress") return;
 
     const now = Date.now();
-    const last = riskCooldownMapRef.current[reason] || 0;
+    const last = riskCooldownMapRef.current[event] || 0;
     if (now - last < cooldownMs) return;
 
-    riskCooldownMapRef.current[reason] = now;
-    reportViolation(reason);
-
-    setRiskScore((prev) => {
-      const next = Math.min(RISK_SCORE_CAP, prev + points);
-      if (
-        next >= RISK_AUTO_SUBMIT_THRESHOLD &&
-        !didAutoSubmitForRiskRef.current
-      ) {
-        didAutoSubmitForRiskRef.current = true;
-        void handleAutoSubmit(reason);
-      }
-      return next;
-    });
-  }
-
-  function normalizeRiskToTen(raw: unknown): number {
-    const value = Number(raw);
-    if (!Number.isFinite(value)) return 0;
-    const scaled = value > 1 ? value : value * 10;
-    return Math.min(10, Math.max(0, scaled));
+    riskCooldownMapRef.current[event] = now;
+    void emitProctorEvent(event, points);
   }
 
   const analyzeCurrentFrame = async () => {
-    if (
-      status !== "in_progress" ||
-      !permission?.granted ||
-      !cameraRef.current ||
-      frameAnalysisBusyRef.current
-    ) {
+    if (status !== "in_progress" || !permission?.granted || visionAnalysisBusyRef.current) {
       return;
     }
 
     const now = Date.now();
-    const dynamicMinInterval =
-      frameAiRisk !== null && frameAiRisk < 2
-        ? LOW_RISK_FRAME_COOLDOWN_MS
-        : AI_FRAME_INTERVAL_MS;
-
-    if (now - lastFrameAnalyzeAtRef.current < dynamicMinInterval) return;
-    if (frameAiRisk !== null && frameAiRisk < 2 && Math.random() > 0.4) return;
+    const minInterval = getSamplingIntervalMs(riskScore);
+    if (now - lastFrameAnalyzeAtRef.current < minInterval) return;
+    if (!shouldSampleFrame(riskScore)) return;
     lastFrameAnalyzeAtRef.current = now;
 
-    frameAnalysisBusyRef.current = true;
+    visionAnalysisBusyRef.current = true;
     try {
-      const takePictureFn =
-        cameraRef.current?.takePictureAsync || cameraRef.current?.takePicture;
-      if (typeof takePictureFn !== "function") return;
+      const result = await visionEngineRef.current.analyzeFrame();
+      if (!result) return;
 
-      const shot = await takePictureFn.call(cameraRef.current, {
-        quality: 0.2,
-        base64: true,
-        skipProcessing: true,
-      });
-
-      const imageBase64 = shot?.base64;
-      if (!imageBase64) return;
-
-      const res = await api.post(
-        `/quizzes/${quizId}/ai/analyze-frame`,
-        {
-          image: imageBase64,
-          timestamp: new Date().toISOString(),
-        },
-        {
-          headers: { Authorization: `Bearer ${token}` },
-        },
-      );
-
-      const data = res?.data ?? {};
-
-      if (typeof data.risk === "number" && Number.isFinite(data.risk)) {
-        const normalized = normalizeRiskToTen(data.risk);
-        setFrameAiRisk(normalized);
-        if (normalized >= 0.5) {
-          addRisk(Math.min(4, Math.max(1, normalized)), "AI_FRAME_RISK", 3000);
-        }
-      }
-
-      const faceCountRaw =
-        typeof data.face_count === "number"
-          ? data.face_count
-          : typeof data.facesCount === "number"
-            ? data.facesCount
-            : undefined;
-
-      if (typeof faceCountRaw === "number" && Number.isFinite(faceCountRaw)) {
-        const count = Math.max(0, Math.floor(faceCountRaw));
-        const yaw = Number(data.yaw ?? data.headPose?.yaw ?? 0);
-        const pitch = Number(data.pitch ?? data.headPose?.pitch ?? 0);
-
-        const mappedFaces = Array.from({ length: count }, (_, idx) =>
-          idx === 0 ? { yawAngle: yaw, pitchAngle: pitch } : {},
-        );
-        setFaces(mappedFaces);
-      }
-
-      if (data.no_face === true) addRisk(1, "NO_FACE", 5000);
-      if (data.multiple_faces === true) addRisk(5, "MULTIPLE_FACES", 3000);
-      if (data.looking_away === true) addRisk(2, "LOOKING_AWAY", 4000);
-    } catch (err: any) {
-      // Backend AI endpoint may not exist in all environments; fail soft.
-      if (err?.response?.status !== 404) {
-        console.log("AI frame analysis unavailable", err?.response?.status || "");
+      const events = inferVisionEvents(result);
+      for (const item of events) {
+        addRisk(item.risk, item.event, 3500);
       }
     } finally {
-      frameAnalysisBusyRef.current = false;
+      visionAnalysisBusyRef.current = false;
     }
   };
 
@@ -377,30 +292,7 @@ export default function QuizTakerScreen({
         setVoiceLevelDb(metering);
 
         if (metering > VOICE_SPEECH_MIN_DB && metering < VOICE_SPEECH_MAX_DB) {
-          addRisk(1, "VOICE_ACTIVITY", 4000);
-        }
-
-        try {
-          const res = await api.post(
-            `/quizzes/${quizId}/ai/analyze-audio-signal`,
-            {
-              metering,
-              timestamp: new Date().toISOString(),
-            },
-            {
-              headers: { Authorization: `Bearer ${token}` },
-            },
-          );
-
-          const aiAudioRisk = Number(res?.data?.risk ?? 0);
-          if (Number.isFinite(aiAudioRisk) && aiAudioRisk > 0) {
-            const normalized = aiAudioRisk <= 1 ? aiAudioRisk * 6 : aiAudioRisk / 20;
-            addRisk(Math.min(3, Math.max(1, normalized)), "AI_AUDIO_RISK", 4000);
-          }
-        } catch (err: any) {
-          if (err?.response?.status !== 404) {
-            console.log("AI audio analysis unavailable", err?.response?.status || "");
-          }
+          addRisk(2, "VOICE_ACTIVITY", 4000);
         }
       }
     } finally {
@@ -411,18 +303,89 @@ export default function QuizTakerScreen({
   useEffect(() => {
     if (status !== "in_progress") {
       setRiskScore(0);
-      setNoFaceCount(0);
-      setHasSeenFaceSignal(false);
       riskCooldownMapRef.current = {};
-      didAutoSubmitForRiskRef.current = false;
     }
   }, [status, quizId]);
 
   useEffect(() => {
-    if (faces.length > 0 && !hasSeenFaceSignal) {
-      setHasSeenFaceSignal(true);
-    }
-  }, [faces, hasSeenFaceSignal]);
+    if (status !== "in_progress") return;
+
+    const client = proctorClientRef.current;
+
+    const onConnect = () => {
+      setSocketConnected(true);
+      void client.join(Number(quizId)).then((ack) => {
+        if (ack.ok) {
+          if (typeof ack.risk_score === "number") {
+            setRiskScore(ack.risk_score);
+          }
+          if (typeof ack.warning_threshold === "number") {
+            setWarningThreshold(ack.warning_threshold);
+          }
+          if (typeof ack.auto_submit_threshold === "number") {
+            setAutoSubmitThreshold(ack.auto_submit_threshold);
+          }
+        }
+      });
+    };
+    const onDisconnect = () => setSocketConnected(false);
+
+    client.socket.on("connect", onConnect);
+    client.socket.on("disconnect", onDisconnect);
+
+    let unsubscribeRisk = () => {};
+    let unsubscribeDecision = () => {};
+    let active = true;
+
+    const startSession = async () => {
+      const joinAck = await client.join(Number(quizId));
+
+      if (!active) return;
+
+      if (joinAck.ok) {
+        setSocketConnected(client.socket.connected);
+        if (typeof joinAck.risk_score === "number") {
+          setRiskScore(joinAck.risk_score);
+        }
+        if (typeof joinAck.warning_threshold === "number") {
+          setWarningThreshold(joinAck.warning_threshold);
+        }
+        if (typeof joinAck.auto_submit_threshold === "number") {
+          setAutoSubmitThreshold(joinAck.auto_submit_threshold);
+        }
+      } else if (__DEV__) {
+        console.log("Could not join proctor channel", joinAck.message || "");
+      }
+
+      unsubscribeRisk = client.onRiskUpdate(applyRiskUpdate);
+      unsubscribeDecision = client.onDecision(handleProctorDecision);
+    };
+
+    void startSession();
+
+    return () => {
+      active = false;
+      unsubscribeRisk();
+      unsubscribeDecision();
+      client.socket.off("connect", onConnect);
+      client.socket.off("disconnect", onDisconnect);
+      setSocketConnected(false);
+    };
+  }, [status, quizId]);
+
+  useEffect(() => {
+    if (status !== "in_progress") return;
+
+    const timer = setInterval(() => {
+      void proctorClientRef.current.heartbeat(Number(quizId)).then((ack) => {
+        if (ack.ok) {
+          applyRiskUpdate(ack as unknown as ProctorRiskUpdate);
+        }
+      });
+    }, PROCTOR_HEARTBEAT_MS);
+
+    return () => clearInterval(timer);
+  }, [status, quizId]);
 
   useEffect(() => {
     const subscription = AppState.addEventListener("change", (nextState) => {
@@ -493,7 +456,7 @@ export default function QuizTakerScreen({
       try {
         const perm = await requestRecordingPermissionsAsync();
         if (!perm.granted) {
-          addRisk(3, "MIC_BLOCKED", 5000);
+          addRisk(4, "MIC_BLOCKED", 5000);
           return;
         }
 
@@ -507,7 +470,7 @@ export default function QuizTakerScreen({
           recorder.record();
         }
       } catch {
-        addRisk(2, "MIC_INIT_FAILED", 5000);
+        addRisk(4, "MIC_BLOCKED", 5000);
       }
     };
 
@@ -522,42 +485,10 @@ export default function QuizTakerScreen({
     };
   }, [status, recorder]);
 
-  // AI face analysis is sampled over time to avoid noisy per-frame decisions.
-  useEffect(() => {
-    if (status !== "in_progress") return;
-
-    const timer = setInterval(() => {
-      if (faces.length === 0) {
-        if (hasSeenFaceSignal) {
-          setNoFaceCount((prev) => prev + 1);
-          addRisk(1, "NO_FACE", 5000);
-        }
-        return;
-      }
-
-      setNoFaceCount(0);
-
-      if (faces.length > 1) {
-        setAiViolations((v) => v + 1);
-        addRisk(5, "MULTIPLE_FACES", 3000);
-      }
-
-      const yaw = faces[0]?.yawAngle ?? 0;
-      const pitch = faces[0]?.pitchAngle ?? 0;
-      if (Math.abs(yaw) > 25 || Math.abs(pitch) > 25) {
-        addRisk(2, "LOOKING_AWAY", 4000);
-      }
-    }, FACE_ANALYSIS_INTERVAL_MS);
-
-    return () => {
-      clearInterval(timer);
-    };
-  }, [faces, hasSeenFaceSignal, status]);
-
   useEffect(() => {
     const sub = addScreenshotListener(() => {
       if (status === "in_progress") {
-        addRisk(3, "SCREEN_CAPTURE_BLOCKED", 2000);
+        addRisk(7, "SCREEN_CAPTURE_ATTEMPT", 2000);
       }
     });
     return () => sub.remove();
@@ -568,7 +499,7 @@ export default function QuizTakerScreen({
 
     const timer = setInterval(() => {
       void analyzeCurrentFrame();
-    }, AI_FRAME_INTERVAL_MS);
+    }, 1500);
 
     return () => clearInterval(timer);
   }, [status, permission?.granted]);
@@ -604,7 +535,6 @@ export default function QuizTakerScreen({
   // Prevent leaving exam screen
   useEffect(() => {
     const unsubscribe = navigation.addListener("beforeRemove", (e: any) => {
-      const isGoingBackToStart = e.data.action.type === 'GO_BACK';
       if (status === "in_progress") {
         e.preventDefault();
         Alert.alert("Warning", "You cannot leave during the exam. Please submit first.");
@@ -725,33 +655,6 @@ export default function QuizTakerScreen({
     }
   };
 
-  const startupCheck = async () => {
-    try {
-      // Just hit start. If it creates a new one, great. If it already exists, it returns those fields anyway!
-      // This is a common idempotent pattern in LMS systems.
-      const fingerprint = await getDeviceFingerprint();
-      const startRes = await api.post(`/quizzes/${quizId}/start`, { deviceFingerprint: fingerprint }, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      
-      if (startRes.data.message === "Quiz already started") {
-        if (startRes.data.finishedAt) {
-          setStatus("submitted");
-        } else {
-          setStatus("in_progress");
-          setStartedAt(new Date(startRes.data.startedAt));
-        }
-      } else {
-         // Because we auto-hit start, we actually started the quiz instantly upon screen load.
-         // Let's modify the flow to ONLY hit start when user explicitly taps "Start Quiz"
-         // To do that properly, I'll bypass the auto-start. Wait, let's keep it manual.
-         // We do not want to auto-start so they don't lose time accidentally opening it.
-      }
-    } catch {
-       // Silently fail if we can't auto-start peek.
-    }
-  };
-
   useEffect(() => {
     if (status === "in_progress" && startedAt && quizDetails) {
       if (timerRef.current) clearInterval(timerRef.current);
@@ -766,7 +669,7 @@ export default function QuizTakerScreen({
         if (remaining <= 0) {
           clearInterval(timerRef.current!);
           setTimeRemainingSec(0);
-          void handleAutoSubmit("TIME_LIMIT");
+          void executeSubmit(true);
         } else {
           setTimeRemainingSec(remaining);
         }
@@ -1017,10 +920,10 @@ export default function QuizTakerScreen({
 
       <View style={styles.riskBarContainer}>
         <Text style={styles.riskBarText}>
-          Risk Score: {riskScore}/{RISK_AUTO_SUBMIT_THRESHOLD}
+          Risk Score: {riskScore.toFixed(2)} / {autoSubmitThreshold}
         </Text>
         <Text style={styles.riskSubText}>
-          Frame AI: {frameAiRisk !== null ? frameAiRisk.toFixed(2) : "-"} | Voice dB: {voiceLevelDb !== null ? voiceLevelDb.toFixed(1) : "-"}
+          Warning: {warningThreshold} | Socket: {socketConnected ? "online" : "offline"} | Voice dB: {voiceLevelDb !== null ? voiceLevelDb.toFixed(1) : "-"}
         </Text>
       </View>
 

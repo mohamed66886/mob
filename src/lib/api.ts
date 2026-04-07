@@ -2,12 +2,27 @@ import axios from "axios";
 import { Platform } from "react-native";
 import Constants from "expo-constants";
 import { LoginResponse, User } from "../types/auth";
+import {
+  clearRefreshToken,
+  getOrCreateDeviceId,
+  getRefreshToken,
+  saveRefreshToken,
+} from "./tokenStorage";
+import { isTransportBlocked } from "./transportSecurity";
+
+let accessToken: string | null = null;
+let refreshPromise: Promise<string | null> | null = null;
+
+function buildRequestNonce() {
+  if (typeof crypto !== "undefined" && typeof (crypto as any).randomUUID === "function") {
+    return (crypto as any).randomUUID();
+  }
+  return `${Date.now()}_${Math.random().toString(36).slice(2, 18)}`;
+}
 
 function resolveDevBaseUrl() {
   const envUrl = String(process.env.EXPO_PUBLIC_API_URL || "").trim();
-  const isProdEnv = /attendqr\.tech\/api\/?$/i.test(envUrl);
-
-  if (!__DEV__ || !isProdEnv) {
+  if (!__DEV__) {
     return envUrl || "https://attendqr.tech/api";
   }
 
@@ -16,6 +31,13 @@ function resolveDevBaseUrl() {
     (Constants as any)?.manifest2?.extra?.expoGo?.debuggerHost ||
     "";
   const hostIp = String(hostUri).split(":")[0];
+
+  if (envUrl) {
+    if (hostIp && /localhost|127\.0\.0\.1/i.test(envUrl)) {
+      return envUrl.replace(/localhost|127\.0\.0\.1/gi, hostIp);
+    }
+    return envUrl;
+  }
 
   if (hostIp) {
     return `http://${hostIp}:5001/api`;
@@ -39,7 +61,146 @@ export const api = axios.create({
   },
 });
 
+type RetryableRequestConfig = {
+  _retry?: boolean;
+  headers?: Record<string, string>;
+  url?: string;
+};
+
+export function setAccessToken(token: string | null) {
+  accessToken = token && token.trim() ? token : null;
+}
+
+export function getAccessToken() {
+  return accessToken;
+}
+
 export const realtimeBaseURL = SOCKET_BASE_URL;
+
+export async function logRuntimeSecurityEvent(payload: {
+  eventType: string;
+  severity?: "low" | "medium" | "high" | "critical";
+  message?: string;
+  metadata?: Record<string, unknown>;
+}) {
+  try {
+    const deviceId = await getOrCreateDeviceId();
+    await api.post(
+      "/security/runtime-events",
+      {
+        eventType: payload.eventType,
+        severity: payload.severity || "high",
+        message: payload.message || null,
+        deviceId,
+        metadata: payload.metadata || {},
+      },
+      {
+        headers: {
+          "x-device-id": deviceId,
+          "x-client-platform": "mobile",
+        },
+      },
+    );
+  } catch {
+    // Never interrupt guard flow because telemetry fails.
+  }
+}
+
+export async function refreshMobileAccessToken(): Promise<string | null> {
+  if (refreshPromise) {
+    return refreshPromise;
+  }
+
+  refreshPromise = (async () => {
+    const refreshToken = await getRefreshToken();
+    if (!refreshToken) {
+      setAccessToken(null);
+      return null;
+    }
+
+    const deviceId = await getOrCreateDeviceId();
+
+    try {
+      const response = await api.post<{ token?: string; refreshToken?: string }>(
+        "/auth/refresh",
+        {
+          refreshToken,
+          device_id: deviceId,
+        },
+        {
+          headers: {
+            "x-device-id": deviceId,
+            "x-client-platform": "mobile",
+          },
+        },
+      );
+
+      const nextAccessToken = String(response.data?.token || "").trim();
+      const nextRefreshToken = String(response.data?.refreshToken || "").trim();
+
+      if (!nextAccessToken || !nextRefreshToken) {
+        await clearRefreshToken();
+        setAccessToken(null);
+        return null;
+      }
+
+      await saveRefreshToken(nextRefreshToken);
+      setAccessToken(nextAccessToken);
+      return nextAccessToken;
+    } catch {
+      await clearRefreshToken();
+      setAccessToken(null);
+      return null;
+    } finally {
+      refreshPromise = null;
+    }
+  })();
+
+  return refreshPromise;
+}
+
+api.interceptors.request.use(async (config) => {
+  if (isTransportBlocked()) {
+    return Promise.reject(new Error("Network transport blocked by certificate pinning policy."));
+  }
+
+  const deviceId = await getOrCreateDeviceId();
+
+  config.headers = config.headers || {};
+  config.headers["x-device-id"] = deviceId;
+  config.headers["x-client-platform"] = "mobile";
+  config.headers["x-nonce"] = buildRequestNonce();
+  config.headers["x-timestamp"] = String(Date.now());
+
+  if (accessToken) {
+    config.headers.Authorization = `Bearer ${accessToken}`;
+  }
+  return config;
+});
+
+api.interceptors.response.use(
+  (response) => response,
+  async (error) => {
+    const status = Number(error?.response?.status || 0);
+    const originalRequest = (error?.config || {}) as RetryableRequestConfig;
+    const requestUrl = String(originalRequest?.url || "");
+    const isLoginRequest = requestUrl.includes("/auth/login");
+    const isRefreshRequest = requestUrl.includes("/auth/refresh");
+
+    if (status === 401 && !isLoginRequest && !isRefreshRequest && !originalRequest._retry) {
+      originalRequest._retry = true;
+      const refreshed = await refreshMobileAccessToken();
+
+      if (refreshed) {
+        originalRequest.headers = originalRequest.headers || {};
+        originalRequest.headers.Authorization = `Bearer ${refreshed}`;
+        return api.request(originalRequest);
+      }
+    }
+
+    return Promise.reject(error);
+  },
+);
 
 export function resolveMediaUrl(raw?: string | null) {
   const value = (raw || "").trim();
@@ -59,9 +220,16 @@ export function resolveMediaUrl(raw?: string | null) {
 }
 
 export async function login(username: string, password: string) {
+  const deviceId = await getOrCreateDeviceId();
   const response = await api.post<LoginResponse>("/auth/login", {
     username: username.trim(),
     password,
+    device_id: deviceId,
+  }, {
+    headers: {
+      "x-device-id": deviceId,
+      "x-client-platform": "mobile",
+    },
   });
 
   return response.data;
