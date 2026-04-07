@@ -24,6 +24,7 @@ workflows:
 
       - name: Create runtime env file
         script: |
+          #!/usr/bin/env bash
           if [ -z "$EXPO_PUBLIC_API_URL" ]; then
             echo "EXPO_PUBLIC_API_URL is missing. Add it in Codemagic environment variables."
             exit 1
@@ -75,6 +76,7 @@ workflows:
 
       - name: Create runtime env file
         script: |
+          #!/usr/bin/env bash
           if [ -z "$EXPO_PUBLIC_API_URL" ]; then
             echo "EXPO_PUBLIC_API_URL is missing. Add it in Codemagic environment variables."
             exit 1
