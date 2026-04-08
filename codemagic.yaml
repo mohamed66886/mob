@@ -52,12 +52,14 @@ workflows:
       node: 20
       xcode: latest
       cocoapods: default
-      # ✅ Correct Codemagic native signing — automatically fetches certificate
-      # and provisioning profile from Apple Developer Portal using the
-      # App Store Connect integration above. No manual keychain steps needed.
+      # iOS Signing — uses files uploaded to Codemagic Code Signing Identities.
+      # Certificate:         lucMX4sW  (meqrcode.p12)
+      # Provisioning profile: meqr_appstore  (attendQr — App Store, com.meqr.code)
       ios_signing:
-        distribution_type: app_store
-        bundle_identifier: com.meqr.code
+        certificates:
+          - lucMX4sW
+        provisioning_profiles:
+          - meqr_appstore
       vars:
         EAS_NO_VCS: "1"
         EXPO_PUBLIC_API_URL: "https://attendqr.tech/api"
