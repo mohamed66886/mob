@@ -57,7 +57,7 @@ workflows:
       # Provisioning profile: meqr_appstore  (attendQr — App Store, com.meqr.code)
       ios_signing:
         certificates:
-          - lucMX4sW
+          - meqrcode
         provisioning_profiles:
           - meqr_appstore
       vars:
