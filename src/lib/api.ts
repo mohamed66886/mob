@@ -58,6 +58,8 @@ export const api = axios.create({
   baseURL: BASE_URL,
   headers: {
     "Content-Type": "application/json",
+    "Origin": "https://attendqr.tech",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36"
   },
 });
 
@@ -165,16 +167,28 @@ api.interceptors.request.use(async (config) => {
   }
 
   const deviceId = await getOrCreateDeviceId();
+  const nonce = buildRequestNonce();
+  const timestamp = String(Date.now());
 
-  config.headers = config.headers || {};
-  config.headers["x-device-id"] = deviceId;
-  config.headers["x-client-platform"] = "mobile";
-  config.headers["x-nonce"] = buildRequestNonce();
-  config.headers["x-timestamp"] = String(Date.now());
-
-  if (accessToken) {
-    config.headers.Authorization = `Bearer ${accessToken}`;
+  if (config.headers && typeof config.headers.set === "function") {
+    config.headers.set("x-device-id", deviceId);
+    config.headers.set("x-client-platform", "mobile");
+    config.headers.set("x-nonce", nonce);
+    config.headers.set("x-timestamp", timestamp);
+    if (accessToken) {
+      config.headers.set("Authorization", `Bearer ${accessToken}`);
+    }
+  } else {
+    config.headers = config.headers || {};
+    config.headers["x-device-id"] = deviceId;
+    config.headers["x-client-platform"] = "mobile";
+    config.headers["x-nonce"] = nonce;
+    config.headers["x-timestamp"] = timestamp;
+    if (accessToken) {
+      config.headers.Authorization = `Bearer ${accessToken}`;
+    }
   }
+
   return config;
 });
 

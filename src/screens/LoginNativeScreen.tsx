@@ -190,7 +190,7 @@ export default function LoginNativeScreen({
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar style="dark" />
-      
+
       <QrLoginScannerModal
         visible={showQrScanner}
         onClose={() => setShowQrScanner(false)}
@@ -217,9 +217,9 @@ export default function LoginNativeScreen({
             {/* Header Area */}
             <View style={styles.headerArea}>
               <Text style={styles.welcomeSubtitle}>Enter your credentials</Text>
-              
-              <TouchableOpacity 
-                style={styles.helpLink} 
+
+              <TouchableOpacity
+                style={styles.helpLink}
                 activeOpacity={0.7}
                 onPress={() => Linking.openURL('https://wa.me/201062097359?text=' + encodeURIComponent('احتاج مساعده بخصوص attendqr'))}
               >
@@ -257,6 +257,9 @@ export default function LoginNativeScreen({
                   value={username}
                   onChangeText={setUsername}
                   autoCapitalize="none"
+                  autoCorrect={false}
+                  spellCheck={false}
+                  keyboardType="email-address"
                   placeholder="Email or username"
                   placeholderTextColor="#9CA3AF"
                   style={styles.input}
@@ -272,6 +275,10 @@ export default function LoginNativeScreen({
                   placeholder="Password"
                   placeholderTextColor="#9CA3AF"
                   secureTextEntry={!showPassword}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  spellCheck={false}
+                  keyboardType="ascii-capable"
                   style={styles.input}
                   editable={!loading}
                 />
@@ -317,9 +324,9 @@ export default function LoginNativeScreen({
 
             <View style={styles.supervisionContainer}>
               <View style={styles.creditRow}>
-   
+
                 <Text style={styles.supervisionText}>
-<Text style={styles.supervisionLabel}>Developed By:</Text> Mohamed Rashad                </Text>
+                  <Text style={styles.supervisionLabel}>Developed By:</Text> M.Rashad & Hamed.M               </Text>
               </View>
 
             </View>
