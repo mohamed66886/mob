@@ -210,6 +210,16 @@ export default function QuizTakerScreen({
     }
   };
 
+  const analyzeCurrentFrameRef = useRef<(() => Promise<void>) | undefined>(undefined);
+  const analyzeVoiceSignalRef = useRef<(() => Promise<void>) | undefined>(undefined);
+  const executeSubmitRef = useRef<((isAuto?: boolean) => Promise<void>) | undefined>(undefined);
+
+  useEffect(() => {
+    analyzeCurrentFrameRef.current = analyzeCurrentFrame;
+    analyzeVoiceSignalRef.current = analyzeVoiceSignal;
+    executeSubmitRef.current = executeSubmit;
+  });
+
   const emitProctorEvent = async (
     event: ProctorEventType,
     risk: number,
@@ -232,7 +242,7 @@ export default function QuizTakerScreen({
     applyRiskUpdate(payload);
 
     if (payload.action === "FORCE_SUBMIT") {
-      void executeSubmit(true);
+      void executeSubmitRef.current?.(true);
       return;
     }
 
@@ -285,7 +295,8 @@ export default function QuizTakerScreen({
 
     voiceAnalysisBusyRef.current = true;
     try {
-      const recorderState = recorder.getStatus();
+      let recorderState: any = null;
+      try { recorderState = recorder.getStatus(); } catch { /* native module unavailable */ }
       const metering = recorderState?.metering;
 
       if (typeof metering === "number" && Number.isFinite(metering)) {
@@ -396,6 +407,13 @@ export default function QuizTakerScreen({
       ) {
         addRisk(6, "APP_EXIT", 500);
 
+        // Fallback: WebSockets are paused immediately when backgrounding.
+        // Firing an HTTP request offers a significantly higher chance of arriving at the server.
+        api.post(`/quizzes/${quizId}/violation`, {
+          type: "APP_EXIT",
+          timestamp: new Date().toISOString(),
+        }).catch(() => {});
+
         // Force save current state / flag
         const currentQ = questions[currentQuestionIndex];
         if (currentQ) {
@@ -410,7 +428,7 @@ export default function QuizTakerScreen({
 
           if (newVal > MAX_ALLOWED_APP_EXITS) {
             // Allowed exits are limited. Third exit forces submission.
-            void executeSubmit(true);
+            void executeSubmitRef.current?.(true);
             return newVal;
           }
 
@@ -470,7 +488,8 @@ export default function QuizTakerScreen({
           recorder.record();
         }
       } catch {
-        addRisk(4, "MIC_BLOCKED", 5000);
+        // expo-audio native module may not be available in Expo Go
+        console.warn("Voice sampling unavailable");
       }
     };
 
@@ -478,10 +497,14 @@ export default function QuizTakerScreen({
 
     return () => {
       mounted = false;
-      if (recorder.isRecording) {
-        void recorder.stop();
+      try {
+        if (recorder.isRecording) {
+          void recorder.stop();
+        }
+        (recorder as any).remove?.();
+      } catch {
+        // ignore cleanup errors
       }
-      (recorder as any).remove?.();
     };
   }, [status, recorder]);
 
@@ -498,7 +521,7 @@ export default function QuizTakerScreen({
     if (status !== "in_progress") return;
 
     const timer = setInterval(() => {
-      void analyzeCurrentFrame();
+      void analyzeCurrentFrameRef.current?.();
     }, 1500);
 
     return () => clearInterval(timer);
@@ -508,7 +531,7 @@ export default function QuizTakerScreen({
     if (status !== "in_progress") return;
 
     const timer = setInterval(() => {
-      void analyzeVoiceSignal();
+      void analyzeVoiceSignalRef.current?.();
     }, VOICE_ANALYSIS_INTERVAL_MS);
 
     return () => clearInterval(timer);
@@ -669,7 +692,7 @@ export default function QuizTakerScreen({
         if (remaining <= 0) {
           clearInterval(timerRef.current!);
           setTimeRemainingSec(0);
-          void executeSubmit(true);
+          void executeSubmitRef.current?.(true);
         } else {
           setTimeRemainingSec(remaining);
         }
