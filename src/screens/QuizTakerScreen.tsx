@@ -16,20 +16,11 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useNavigation } from "@react-navigation/native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { CheckCircle, Clock, AlertTriangle, ChevronLeft, Flag, Check } from "lucide-react-native";
-import { CameraView, useCameraPermissions } from "expo-camera";
-import {
-  useAudioRecorder,
-  requestRecordingPermissionsAsync,
-  setAudioModeAsync,
-  RecordingPresets,
-} from "expo-audio";
 
 import { api } from "../lib/api";
 import { User } from "../types/auth";
 import { usePreventScreenCapture, addScreenshotListener } from "expo-screen-capture";
 import { createProctorSocketClient } from "../proctoring/socket";
-import { getSamplingIntervalMs, inferVisionEvents, shouldSampleFrame } from "../proctoring/rules";
-import { resolveOnDeviceVisionEngine } from "../proctoring/vision";
 import { ProctorDecision, ProctorEventType, ProctorRiskUpdate } from "../proctoring/types";
 
 async function getDeviceFingerprint(): Promise<string> {
@@ -56,9 +47,6 @@ const BRAND = {
   danger: "#ff3b30",
 };
 
-const VOICE_ANALYSIS_INTERVAL_MS = 2500;
-const VOICE_SPEECH_MIN_DB = -30;
-const VOICE_SPEECH_MAX_DB = -10;
 const MAX_ALLOWED_APP_EXITS = 2;
 const PROCTOR_HEARTBEAT_MS = 12000;
 
@@ -175,21 +163,9 @@ export default function QuizTakerScreen({
   const [warningThreshold, setWarningThreshold] = useState(10);
   const [autoSubmitThreshold, setAutoSubmitThreshold] = useState(20);
   const [socketConnected, setSocketConnected] = useState(false);
-  const [voiceLevelDb, setVoiceLevelDb] = useState<number | null>(null);
   const riskCooldownMapRef = useRef<Record<string, number>>({});
   const lastWarningAtRef = useRef(0);
-  const cameraRef = useRef<any>(null);
-  const voiceAnalysisBusyRef = useRef(false);
-  const visionAnalysisBusyRef = useRef(false);
-  const lastFrameAnalyzeAtRef = useRef(0);
   const proctorClientRef = useRef(createProctorSocketClient(token));
-  const visionEngineRef = useRef(resolveOnDeviceVisionEngine());
-
-  const [permission, requestPermission] = useCameraPermissions();
-  const recorder = useAudioRecorder({
-    ...RecordingPresets.LOW_QUALITY,
-    isMeteringEnabled: true,
-  });
   const appState = useRef(AppState.currentState);
 
   const applyRiskUpdate = (payload: ProctorRiskUpdate) => {
@@ -210,13 +186,9 @@ export default function QuizTakerScreen({
     }
   };
 
-  const analyzeCurrentFrameRef = useRef<(() => Promise<void>) | undefined>(undefined);
-  const analyzeVoiceSignalRef = useRef<(() => Promise<void>) | undefined>(undefined);
   const executeSubmitRef = useRef<((isAuto?: boolean) => Promise<void>) | undefined>(undefined);
 
   useEffect(() => {
-    analyzeCurrentFrameRef.current = analyzeCurrentFrame;
-    analyzeVoiceSignalRef.current = analyzeVoiceSignal;
     executeSubmitRef.current = executeSubmit;
   });
 
@@ -264,52 +236,6 @@ export default function QuizTakerScreen({
     riskCooldownMapRef.current[event] = now;
     void emitProctorEvent(event, points);
   }
-
-  const analyzeCurrentFrame = async () => {
-    if (status !== "in_progress" || !permission?.granted || visionAnalysisBusyRef.current) {
-      return;
-    }
-
-    const now = Date.now();
-    const minInterval = getSamplingIntervalMs(riskScore);
-    if (now - lastFrameAnalyzeAtRef.current < minInterval) return;
-    if (!shouldSampleFrame(riskScore)) return;
-    lastFrameAnalyzeAtRef.current = now;
-
-    visionAnalysisBusyRef.current = true;
-    try {
-      const result = await visionEngineRef.current.analyzeFrame();
-      if (!result) return;
-
-      const events = inferVisionEvents(result);
-      for (const item of events) {
-        addRisk(item.risk, item.event, 3500);
-      }
-    } finally {
-      visionAnalysisBusyRef.current = false;
-    }
-  };
-
-  const analyzeVoiceSignal = async () => {
-    if (status !== "in_progress" || voiceAnalysisBusyRef.current) return;
-
-    voiceAnalysisBusyRef.current = true;
-    try {
-      let recorderState: any = null;
-      try { recorderState = recorder.getStatus(); } catch { /* native module unavailable */ }
-      const metering = recorderState?.metering;
-
-      if (typeof metering === "number" && Number.isFinite(metering)) {
-        setVoiceLevelDb(metering);
-
-        if (metering > VOICE_SPEECH_MIN_DB && metering < VOICE_SPEECH_MAX_DB) {
-          addRisk(2, "VOICE_ACTIVITY", 4000);
-        }
-      }
-    } finally {
-      voiceAnalysisBusyRef.current = false;
-    }
-  };
 
   useEffect(() => {
     if (status !== "in_progress") {
@@ -454,87 +380,12 @@ export default function QuizTakerScreen({
   }, [status, currentQuestionIndex, questions]);
 
   useEffect(() => {
-    if (status === "in_progress" && !permission?.granted) {
-      requestPermission();
-    }
-  }, [status, permission]);
-
-  useEffect(() => {
-    if (status === "in_progress" && permission && !permission.granted && permission.status !== "undetermined") {
-      addRisk(10, "CAMERA_BLOCKED", 0);
-    }
-  }, [permission, status]);
-
-  useEffect(() => {
-    let mounted = true;
-
-    const startVoiceSampling = async () => {
-      if (status !== "in_progress") return;
-
-      try {
-        const perm = await requestRecordingPermissionsAsync();
-        if (!perm.granted) {
-          addRisk(4, "MIC_BLOCKED", 5000);
-          return;
-        }
-
-        await setAudioModeAsync({
-          allowsRecording: true,
-          playsInSilentMode: true,
-        });
-
-        await recorder.prepareToRecordAsync();
-        if (mounted && !recorder.isRecording) {
-          recorder.record();
-        }
-      } catch {
-        // expo-audio native module may not be available in Expo Go
-        console.warn("Voice sampling unavailable");
-      }
-    };
-
-    void startVoiceSampling();
-
-    return () => {
-      mounted = false;
-      try {
-        if (recorder.isRecording) {
-          void recorder.stop();
-        }
-        (recorder as any).remove?.();
-      } catch {
-        // ignore cleanup errors
-      }
-    };
-  }, [status, recorder]);
-
-  useEffect(() => {
     const sub = addScreenshotListener(() => {
       if (status === "in_progress") {
         addRisk(7, "SCREEN_CAPTURE_ATTEMPT", 2000);
       }
     });
     return () => sub.remove();
-  }, [status]);
-
-  useEffect(() => {
-    if (status !== "in_progress") return;
-
-    const timer = setInterval(() => {
-      void analyzeCurrentFrameRef.current?.();
-    }, 1500);
-
-    return () => clearInterval(timer);
-  }, [status, permission?.granted]);
-
-  useEffect(() => {
-    if (status !== "in_progress") return;
-
-    const timer = setInterval(() => {
-      void analyzeVoiceSignalRef.current?.();
-    }, VOICE_ANALYSIS_INTERVAL_MS);
-
-    return () => clearInterval(timer);
   }, [status]);
 
   useEffect(() => {
@@ -861,9 +712,13 @@ export default function QuizTakerScreen({
            <Text style={styles.headerTitle}>Exam Room</Text>
          </View>
          <View style={styles.pendingContainer}>
+           <View style={styles.pendingIntroCard}>
+             <Text style={styles.pendingIntroTitle}>Exam Instructions</Text>
+             <Text style={styles.pendingIntroText}>Review the details below before you begin. Your answers will be saved during the attempt.</Text>
+           </View>
            <View style={styles.pendingCard}>
              <Text style={styles.quizTitle}>{quizDetails.title}</Text>
-             <Text style={styles.quizDesc}>{quizDetails.description}</Text>
+             {quizDetails.description ? <Text style={styles.quizDesc}>{quizDetails.description}</Text> : null}
              <View style={styles.infoRow}>
                <Clock size={20} color={BRAND.primary} />
                <Text style={styles.infoText}>Time Limit: {quizDetails.time_limit_minutes} Mins</Text>
@@ -922,13 +777,6 @@ export default function QuizTakerScreen({
 
   return (
     <SafeAreaView style={styles.screen} edges={["top", "bottom"]}>
-      {status === "in_progress" && permission?.granted && (
-        <CameraView
-          ref={cameraRef}
-          style={styles.cameraFloating}
-          facing="front"
-        />
-      )}
       <View style={styles.examHeader}>
         <Text style={styles.examTitle} numberOfLines={1}>{quizDetails.title}</Text>
         <View style={styles.timerBadge}>
@@ -946,7 +794,7 @@ export default function QuizTakerScreen({
           Risk Score: {riskScore.toFixed(2)} / {autoSubmitThreshold}
         </Text>
         <Text style={styles.riskSubText}>
-          Warning: {warningThreshold} | Socket: {socketConnected ? "online" : "offline"} | Voice dB: {voiceLevelDb !== null ? voiceLevelDb.toFixed(1) : "-"}
+          Warning: {warningThreshold} | Socket: {socketConnected ? "online" : "offline"}
         </Text>
       </View>
 
@@ -1134,20 +982,37 @@ const styles = StyleSheet.create({
   backBtn: { padding: 4, marginRight: 8 },
   headerTitle: { fontSize: 18, fontWeight: "700", color: BRAND.text },
   
-  pendingContainer: { flex: 1, padding: 20, justifyContent: "center" },
+  pendingContainer: { flex: 1, paddingHorizontal: 20, paddingTop: 18, paddingBottom: 24 },
+  pendingIntroCard: {
+    backgroundColor: BRAND.surface,
+    borderWidth: 1,
+    borderColor: BRAND.border,
+    borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    marginBottom: 12,
+  },
+  pendingIntroTitle: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: BRAND.text,
+    marginBottom: 4,
+  },
+  pendingIntroText: {
+    fontSize: 13,
+    color: BRAND.textMuted,
+    lineHeight: 19,
+  },
   pendingCard: {
     backgroundColor: BRAND.surface,
     padding: 24,
-    borderRadius: 20,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.05,
-    shadowRadius: 10,
-    elevation: 2,
-    marginBottom: 30,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: BRAND.border,
+    marginBottom: 16,
   },
-  quizTitle: { fontSize: 24, fontWeight: "800", color: BRAND.text, marginBottom: 8 },
-  quizDesc: { fontSize: 15, color: BRAND.textMuted, lineHeight: 22, marginBottom: 20 },
+  quizTitle: { fontSize: 23, fontWeight: "800", color: BRAND.text, marginBottom: 8 },
+  quizDesc: { fontSize: 15, color: BRAND.textMuted, lineHeight: 22, marginBottom: 18 },
   infoRow: { flexDirection: "row", alignItems: "center", gap: 10, marginTop: 16 },
   infoText: { fontSize: 15, fontWeight: "600", color: BRAND.text },
 
@@ -1177,16 +1042,13 @@ const styles = StyleSheet.create({
   
   startBtn: {
     backgroundColor: BRAND.primary,
-    paddingVertical: 18,
-    borderRadius: 16,
+    paddingVertical: 16,
+    borderRadius: 12,
     alignItems: "center",
-    shadowColor: BRAND.primary,
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.3,
-    shadowRadius: 10,
-    elevation: 5,
+    borderWidth: 1,
+    borderColor: "#2c7fcb",
   },
-  startBtnText: { color: "#fff", fontSize: 18, fontWeight: "800" },
+  startBtnText: { color: "#fff", fontSize: 20, fontWeight: "800" },
 
   examHeader: {
     flexDirection: "row",
@@ -1206,17 +1068,6 @@ const styles = StyleSheet.create({
   },
   timerLabelText: { fontSize: 16, color: '#212529' },
   timerText: { fontSize: 16, color: '#212529', fontVariant: ["tabular-nums"] },
-  cameraFloating: {
-    width: 96,
-    height: 128,
-    position: "absolute",
-    right: 10,
-    bottom: 96,
-    zIndex: 999,
-    elevation: 999,
-    borderRadius: 10,
-    overflow: "hidden",
-  },
   riskBarContainer: {
     backgroundColor: '#fff3cd',
     borderBottomWidth: 1,

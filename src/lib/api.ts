@@ -3,6 +3,8 @@ import { Platform } from "react-native";
 import Constants from "expo-constants";
 import { LoginResponse, User } from "../types/auth";
 import {
+  getAccessTokenFromStorage,
+  saveAccessToken,
   clearRefreshToken,
   getOrCreateDeviceId,
   getRefreshToken,
@@ -116,6 +118,11 @@ export async function refreshMobileAccessToken(): Promise<string | null> {
   refreshPromise = (async () => {
     const refreshToken = await getRefreshToken();
     if (!refreshToken) {
+      const storedAccessToken = String((await getAccessTokenFromStorage()) || "").trim();
+      if (storedAccessToken) {
+        setAccessToken(storedAccessToken);
+        return storedAccessToken;
+      }
       setAccessToken(null);
       return null;
     }
@@ -147,11 +154,31 @@ export async function refreshMobileAccessToken(): Promise<string | null> {
       }
 
       await saveRefreshToken(nextRefreshToken);
+      await saveAccessToken(nextAccessToken);
       setAccessToken(nextAccessToken);
       return nextAccessToken;
-    } catch {
-      await clearRefreshToken();
-      setAccessToken(null);
+    } catch (error: any) {
+      const status = Number(error?.response?.status || 0);
+
+      // Clear session only when backend explicitly rejects the refresh token.
+      if (status === 400 || status === 401 || status === 403) {
+        await clearRefreshToken();
+        setAccessToken(null);
+        return null;
+      }
+
+      // For transient failures (network/server), keep session alive using last known token.
+      const currentAccessToken = String(accessToken || "").trim();
+      if (currentAccessToken) {
+        return currentAccessToken;
+      }
+
+      const storedAccessToken = String((await getAccessTokenFromStorage()) || "").trim();
+      if (storedAccessToken) {
+        setAccessToken(storedAccessToken);
+        return storedAccessToken;
+      }
+
       return null;
     } finally {
       refreshPromise = null;

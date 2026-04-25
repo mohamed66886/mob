@@ -323,11 +323,12 @@ export default function LoginNativeScreen({
             </TouchableOpacity>
 
             <View style={styles.supervisionContainer}>
-              <View style={styles.creditRow}>
-
-                <Text style={styles.supervisionText}>
-                  <Text style={styles.supervisionLabel}>Developed By:</Text> M.Rashad & Hamed.M               </Text>
-              </View>
+  <View style={styles.creditRow}>
+  <Text style={styles.supervisionText}>
+    <Text style={styles.supervisionLabel}>Under Supervision: </Text>
+    Dr. Mai Ramadan
+  </Text>
+</View>
 
             </View>
 
