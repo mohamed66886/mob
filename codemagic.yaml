@@ -55,6 +55,14 @@ workflows:
       node: 20
       xcode: latest
       cocoapods: default
+      # iOS Signing — uses files uploaded to Codemagic Code Signing Identities.
+      # Certificate:        lucMX4sW  (meqrcode.p12)
+      # Provisioning profile: meqr_appstore  (attendQr — App Store, com.meqr.code)
+      ios_signing:
+        certificates:
+          - meqrcode
+        provisioning_profiles:
+          - meqr_appstore
       vars:
         EAS_NO_VCS: "1"
         BUNDLE_ID: com.meqr.code
@@ -106,3 +114,8 @@ workflows:
       - build/ios/ipa/*.ipa
       - /tmp/xcodebuild_logs/*.log
       - $HOME/Library/Developer/Xcode/DerivedData/**/Build/**/*.dSYM
+    
+    publishing:
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: true
