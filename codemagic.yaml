@@ -3,12 +3,13 @@ workflows:
     name: Mobile Android Release (Expo)
     max_build_duration: 60
     instance_type: mac_mini_m2
-    working_directory: mobile
+    working_directory: .
 
     environment:
       node: 20
       vars:
         EAS_NO_VCS: "1"
+        EXPO_PUBLIC_API_URL: "https://attendqr.tech/api"
       groups:
         - mobile_env
 
@@ -20,14 +21,11 @@ workflows:
 
     scripts:
       - name: Install dependencies
-        script: npm ci
+        script: npm install
 
       - name: Create runtime env file
         script: |
-          if [ -z "$EXPO_PUBLIC_API_URL" ]; then
-            echo "EXPO_PUBLIC_API_URL is missing. Add it in Codemagic environment variables."
-            exit 1
-          fi
+          #!/usr/bin/env bash
           printf "EXPO_PUBLIC_API_URL=%s\n" "$EXPO_PUBLIC_API_URL" > .env
 
       - name: Generate Android native project
@@ -40,13 +38,12 @@ workflows:
 
     artifacts:
       - android/app/build/outputs/**/*.apk
-      - mobile/android/app/build/outputs/**/*.apk
 
   mobile_ios_release:
     name: Mobile iOS Release (Expo)
     max_build_duration: 90
     instance_type: mac_mini_m2
-    working_directory: mobile
+    working_directory: .
 
     integrations:
       app_store_connect: codemagic_app_store_connect
@@ -65,12 +62,12 @@ workflows:
           - meqr_appstore
       vars:
         EAS_NO_VCS: "1"
+        EXPO_PUBLIC_API_URL: "https://attendqr.tech/api"
         BUNDLE_ID: com.meqr.code
-        XCODE_WORKSPACE: ios/mobile.xcworkspace
-        XCODE_SCHEME: mobile
+        XCODE_WORKSPACE: ios/attendQr.xcworkspace
+        XCODE_SCHEME: attendQr
       groups:
         - mobile_env
-        - ios_signing
 
     cache:
       cache_paths:
@@ -80,35 +77,45 @@ workflows:
 
     scripts:
       - name: Install dependencies
-        script: npm ci
+        script: npm install
 
       - name: Create runtime env file
         script: |
-          if [ -z "$EXPO_PUBLIC_API_URL" ]; then
-            echo "EXPO_PUBLIC_API_URL is missing. Add it in Codemagic environment variables."
-            exit 1
-          fi
+          #!/usr/bin/env bash
           printf "EXPO_PUBLIC_API_URL=%s\n" "$EXPO_PUBLIC_API_URL" > .env
 
       - name: Generate iOS native project
         script: npx expo prebuild --platform ios --non-interactive
+
+      - name: Patch iOS entitlements (remove aps-environment)
+        script: |
+          #!/usr/bin/env bash
+          # expo-notifications adds aps-environment which requires a Push Notifications
+          # provisioning profile. Remove it so CI build succeeds with a standard profile.
+          # PERMANENT FIX: Enable Push Notifications on com.meqr.code in Apple Developer
+          # Portal → Identifiers, then delete this step.
+          ENTITLEMENTS="ios/attendQr/attendQr.entitlements"
+          if [ -f "$ENTITLEMENTS" ]; then
+            /usr/libexec/PlistBuddy -c "Delete :aps-environment" "$ENTITLEMENTS" 2>/dev/null || true
+            echo "✅ Patched entitlements — removed aps-environment"
+          else
+            echo "⚠️  Entitlements file not found at $ENTITLEMENTS"
+          fi
 
       - name: Install CocoaPods
         script: |
           cd ios
           pod install
 
-      - name: Configure iOS signing files
-        script: |
-          keychain initialize
-          app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create
-          xcode-project use-profiles
+      - name: Set up code signing
+        script: xcode-project use-profiles
 
       - name: Build iOS IPA
         script: |
           xcode-project build-ipa \
             --workspace "$XCODE_WORKSPACE" \
-            --scheme "$XCODE_SCHEME"
+            --scheme "$XCODE_SCHEME" \
+            --remove-xcarchive
 
     artifacts:
       - build/ios/ipa/*.ipa
