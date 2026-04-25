@@ -145,6 +145,11 @@ export default function RoomChatNativeScreen({
   const isCallSupported = Constants.appOwnership !== "expo";
   const insets = useSafeAreaInsets();
   const todayStr = useMemo(() => new Date().toLocaleDateString(), []);
+  const normalizedRole = String(user?.role || "").toLowerCase().trim();
+  const canSendMessages = ["super_admin", "university_admin", "college_admin", "admin"].includes(normalizedRole);
+  const composerLockMessage = normalizedRole === "student"
+    ? "الطلاب لا يمكنهم إرسال رسائل في الوقت الحالي."
+    : "الأدمن فقط يمكنه إرسال رسائل في الوقت الحالي.";
 
   const [room, setRoom] = useState<any>(null);
   const [members, setMembers] = useState<any[]>([]);
@@ -579,23 +584,29 @@ export default function RoomChatNativeScreen({
 
   const emitTypingState = useCallback(
     (isTyping: boolean) => {
+      if (!canSendMessages) return;
       if (!socket?.connected) return;
       socket.emit("typing", { roomId: numericRoomId, isTyping });
     },
-    [numericRoomId, socket],
+    [canSendMessages, numericRoomId, socket],
   );
 
   const { handleTypingValue, stopTypingNow } = useDebouncedTyping(emitTypingState, 1200);
 
   const handleTextChange = useCallback(
     (value: string) => {
+      if (!canSendMessages) return;
       setInputText(value);
       handleTypingValue(value);
     },
-    [handleTypingValue],
+    [canSendMessages, handleTypingValue],
   );
 
   const handleSendText = async () => {
+    if (!canSendMessages) {
+      Alert.alert("غير متاح", "الأدمن فقط يمكنه إرسال الرسائل في الوقت الحالي.");
+      return;
+    }
     if ((!inputText.trim() && !selectedAttachment) || !numericRoomId) return;
 
     setIsSending(true);
@@ -744,9 +755,9 @@ export default function RoomChatNativeScreen({
         resolveUploadUrl={resolveUploadUrl}
         onSetProfileUser={setProfileUser}
         onSetSelectedMessage={setSelectedMessage}
-        onReact={handleReact}
-        onReply={handleReply}
-        onShowMessageMenu={showMessageMenuWithAnimation}
+        onReact={canSendMessages ? handleReact : () => {}}
+        onReply={canSendMessages ? handleReply : () => {}}
+        onShowMessageMenu={canSendMessages ? showMessageMenuWithAnimation : () => {}}
         onPreviewImage={setPreviewImageUri}
         onTogglePlayVoice={togglePlayVoice}
         onOpenAttachment={handleOpenAttachment}
@@ -917,32 +928,38 @@ export default function RoomChatNativeScreen({
           ) : null}
         </View>
 
-        <ChatComposer
-          styles={styles}
-          brandPrimary={BRAND.primary}
-          brandTextMuted={BRAND.textMuted}
-          insetsBottom={insets.bottom}
-          replyingTo={replyingTo}
-          editingMessage={editingMessage}
-          selectedAttachment={selectedAttachment || null}
-          isRecording={isRecording}
-          recordingMs={recordingMs}
-          waveAnims={waveAnims}
-          inputText={inputText}
-          onChangeText={handleTextChange}
-          onSendText={handleSendText}
-          onToggleRecording={toggleRecording}
-          onPickImageFromCamera={pickImageFromCamera}
-          onPickImage={pickImage}
-          onPickDocument={pickDocument}
-          onCancelReply={() => setReplyingTo(null)}
-          onCancelEditing={() => {
-            setEditingMessage(null);
-            setInputText("");
-          }}
-          onCancelAttachment={() => setSelectedAttachment(null)}
-          formatThreePartName={formatThreePartName}
-        />
+        {canSendMessages ? (
+          <ChatComposer
+            styles={styles}
+            brandPrimary={BRAND.primary}
+            brandTextMuted={BRAND.textMuted}
+            insetsBottom={insets.bottom}
+            replyingTo={replyingTo}
+            editingMessage={editingMessage}
+            selectedAttachment={selectedAttachment || null}
+            isRecording={isRecording}
+            recordingMs={recordingMs}
+            waveAnims={waveAnims}
+            inputText={inputText}
+            onChangeText={handleTextChange}
+            onSendText={handleSendText}
+            onToggleRecording={toggleRecording}
+            onPickImageFromCamera={pickImageFromCamera}
+            onPickImage={pickImage}
+            onPickDocument={pickDocument}
+            onCancelReply={() => setReplyingTo(null)}
+            onCancelEditing={() => {
+              setEditingMessage(null);
+              setInputText("");
+            }}
+            onCancelAttachment={() => setSelectedAttachment(null)}
+            formatThreePartName={formatThreePartName}
+          />
+        ) : (
+          <View style={[styles.composerLockedContainer, { paddingBottom: Math.max(insets.bottom, 10) }]}>
+            <Text style={styles.composerLockedText}>{composerLockMessage}</Text>
+          </View>
+        )}
 
       </KeyboardAvoidingView>
 
@@ -1044,6 +1061,22 @@ const styles = StyleSheet.create({
   inlineReplyText: { fontSize: 14, color: BRAND.textMuted },
 
   composerContainer: { flexDirection: "row", alignItems: "flex-end", paddingHorizontal: 8, paddingTop: 10, backgroundColor: BRAND.surface, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: BRAND.border },
+  composerLockedContainer: {
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    backgroundColor: BRAND.surface,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: BRAND.border,
+  },
+  composerLockedText: {
+    textAlign: "center",
+    color: BRAND.textMuted,
+    fontSize: 14,
+    fontWeight: "700",
+    backgroundColor: BRAND.inputBg,
+    paddingVertical: 12,
+    borderRadius: 14,
+  },
   inputWrapper: { flex: 1, flexDirection: "row", alignItems: "center", backgroundColor: BRAND.inputBg, borderRadius: 20, paddingHorizontal: 16, minHeight: 40, maxHeight: 120, marginBottom: 10 },
   input: { flex: 1, fontSize: 16, paddingVertical: 10, paddingTop: 10 },
 

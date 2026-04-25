@@ -266,6 +266,10 @@ export default function WorkspaceRoomProfileNativeScreen({ token, user, route, n
         renderItem={({ item, index }) => {
           const name = formatThreePartName(item?.name);
           const role = String(item?.role || "member");
+          const roleLabel = role
+            .replace(/[_-]+/g, " ")
+            .trim()
+            .replace(/\b\w/g, (char) => char.toUpperCase());
           const isLast = index === filteredMembers.length - 1;
 
           return (
@@ -282,7 +286,7 @@ export default function WorkspaceRoomProfileNativeScreen({ token, user, route, n
               <View style={styles.memberInfo}>
                 <Text numberOfLines={1} style={styles.memberName}>{name}</Text>
                 <Text numberOfLines={1} style={styles.memberMeta}>
-                  {item?.username ? `@${item.username}` : "online"}
+                  {roleLabel || "Member"}
                 </Text>
               </View>
               {role === "doctor" && (

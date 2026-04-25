@@ -62,6 +62,8 @@ const BRAND = {
   unreadBadge: "#3390ec",
 };
 
+const CREATE_ROOM_FROZEN = true;
+
 function authHeaders(token: string) {
   return { headers: { Authorization: `Bearer ${token}` } };
 }
@@ -184,7 +186,7 @@ export default function WorkspaceNativeScreen({ token, user, navigation }: any) 
   const [activeType, setActiveType] = useState<"all" | "subject" | "section" | "custom">("all");
   
   const [isActionModalVisible, setActionModalVisible] = useState(false);
-  const [mobileAction, setMobileAction] = useState<"create" | "join">("create");
+  const [mobileAction, setMobileAction] = useState<"create" | "join">(CREATE_ROOM_FROZEN ? "join" : "create");
   const [newRoomName, setNewRoomName] = useState("");
   const [inviteCode, setInviteCode] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -251,6 +253,11 @@ export default function WorkspaceNativeScreen({ token, user, navigation }: any) 
   const handleAction = async () => {
     const isCreate = mobileAction === "create";
     const value = isCreate ? newRoomName.trim() : inviteCode.trim();
+
+    if (isCreate && CREATE_ROOM_FROZEN) {
+      Alert.alert("Temporarily Unavailable", "Create room is disabled right now.");
+      return;
+    }
     
     if (isCreate && value.length < 3) return Alert.alert("Validation", "Room name must be at least 3 characters");
     if (!isCreate && !value) return Alert.alert("Validation", "Enter invite code");
@@ -284,7 +291,13 @@ export default function WorkspaceNativeScreen({ token, user, navigation }: any) 
       <View style={styles.headerContainer}>
         <View style={[styles.header, { paddingTop: insets.top + 10 }]}>
           <Text style={styles.headerTitle}>Chats</Text>
-          <Pressable style={styles.headerEditBtn} onPress={() => setActionModalVisible(true)}>
+          <Pressable
+            style={styles.headerEditBtn}
+            onPress={() => {
+              if (CREATE_ROOM_FROZEN) setMobileAction("join");
+              setActionModalVisible(true);
+            }}
+          >
             <Edit2 color={BRAND.primary} size={22} />
           </Pressable>
         </View>
@@ -359,7 +372,11 @@ export default function WorkspaceNativeScreen({ token, user, navigation }: any) 
 
       <AnimatedPressable 
         style={({ pressed }) => [styles.fab, { bottom: insets.bottom + 20 }, pressed && { transform: [{ scale: 0.92 }] }]} 
-        onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); setActionModalVisible(true); }}
+        onPress={() => {
+          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+          if (CREATE_ROOM_FROZEN) setMobileAction("join");
+          setActionModalVisible(true);
+        }}
       >
         <Edit2 color="white" size={26} strokeWidth={2.5} />
       </AnimatedPressable>
@@ -378,8 +395,32 @@ export default function WorkspaceNativeScreen({ token, user, navigation }: any) 
             </View>
 
             <View style={styles.segmentedControl}>
-              <Pressable style={[styles.segmentBtn, mobileAction === "create" && styles.segmentBtnActive]} onPress={() => { Haptics.selectionAsync(); setMobileAction("create"); }}>
-                <Text style={[styles.segmentText, mobileAction === "create" && styles.segmentTextActive]}>Create Room</Text>
+              <Pressable
+                style={[
+                  styles.segmentBtn,
+                  mobileAction === "create" && styles.segmentBtnActive,
+                  CREATE_ROOM_FROZEN && styles.segmentBtnDisabled,
+                ]}
+                onPress={() => {
+                  if (CREATE_ROOM_FROZEN) {
+                    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+                    Alert.alert("Temporarily Unavailable", "Create room is disabled right now.");
+                    return;
+                  }
+                  Haptics.selectionAsync();
+                  setMobileAction("create");
+                }}
+                disabled={CREATE_ROOM_FROZEN}
+              >
+                <Text
+                  style={[
+                    styles.segmentText,
+                    mobileAction === "create" && styles.segmentTextActive,
+                    CREATE_ROOM_FROZEN && styles.segmentTextDisabled,
+                  ]}
+                >
+                  Create Room
+                </Text>
               </Pressable>
               <Pressable style={[styles.segmentBtn, mobileAction === "join" && styles.segmentBtnActive]} onPress={() => { Haptics.selectionAsync(); setMobileAction("join"); }}>
                 <Text style={[styles.segmentText, mobileAction === "join" && styles.segmentTextActive]}>Join via Code</Text>
@@ -463,8 +504,10 @@ const styles = StyleSheet.create({
   segmentedControl: { flexDirection: "row", backgroundColor: BRAND.backgroundMuted, marginHorizontal: 20, marginBottom: 20, padding: 4, borderRadius: 14 },
   segmentBtn: { flex: 1, paddingVertical: 10, alignItems: "center", borderRadius: 10 },
   segmentBtnActive: { backgroundColor: BRAND.surface, shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 2, elevation: 2 },
+  segmentBtnDisabled: { opacity: 0.5 },
   segmentText: { fontSize: 14, fontWeight: "700", color: BRAND.textMuted },
   segmentTextActive: { color: BRAND.text },
+  segmentTextDisabled: { color: BRAND.textMuted },
 
   modalBody: { paddingHorizontal: 20, gap: 16 },
   modalInput: { backgroundColor: BRAND.backgroundMuted, borderRadius: 14, paddingHorizontal: 16, paddingVertical: 14, fontSize: 16, color: BRAND.text },

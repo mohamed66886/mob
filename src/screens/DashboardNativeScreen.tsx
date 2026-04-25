@@ -9,7 +9,6 @@ import {
   Dimensions,
   View,
   Image,
-  FlatList,
   RefreshControl,
   ScrollView,
 } from "react-native";
@@ -28,12 +27,11 @@ import Animated, {
   withSpring,
   FadeInDown,
   FadeIn,
-  SharedValue,
 } from "react-native-reanimated";
 import { useNavigation } from "@react-navigation/native";
 import * as Haptics from "expo-haptics";
 
-import { api, resolveMediaUrl } from "../lib/api";
+import { api, getMe, resolveMediaUrl } from "../lib/api";
 import { User, UserRole } from "../types/auth";
 import LottieView from "../components/AppLottieView.native";
 import {
@@ -168,73 +166,21 @@ function AttendanceBarChart({ data }: { data: StudentAttendanceRow[] }) {
 
 
 // ==========================================
-// 3. Hero Slider (Carousel)
+// 3. Hero Banner (Static Image)
 // ==========================================
-const SLIDER_DATA = [
-  { id: "1", image: "https://scontent.fcai19-12.fna.fbcdn.net/v/t39.30808-6/641274873_1370114118495356_2944264532323131114_n.jpg?_nc_cat=110&ccb=1-7&_nc_sid=13d280&_nc_ohc=leOoOfY-7psQ7kNvwFV_P2w&_nc_oc=Adq16OMWqI-htap3IdFKxH4wXeIuxG8oeBLf3Q2tA2xANGau2ZLK4PK9x8CMPIbV608&_nc_zt=23&_nc_ht=scontent.fcai19-12.fna&_nc_gid=buYsgyl-9pYT0yC0f7yxyQ&_nc_ss=7a3a8&oh=00_Af2L-_RM8pRuSGMErosPogHJoKVWGq_vENnq5CuRMuUYDA&oe=69D52419", title: "Welcome to Campus" },
-  { id: "2", image: "https://scontent.fcai19-12.fna.fbcdn.net/v/t39.30808-6/582711450_1288170746689694_4089584294249058597_n.jpg?_nc_cat=110&ccb=1-7&_nc_sid=13d280&_nc_ohc=hiwcGv_TpXQQ7kNvwFKEz2y&_nc_oc=AdppUxNGyOJQf-iY73TJwcSsiomiwNEVUoXExHojtcwxSvnrVr8vs7DbeJrpypIaWO8&_nc_zt=23&_nc_ht=scontent.fcai19-12.fna&_nc_gid=8aYB9AbMaPQ838Zrhv2SEQ&_nc_ss=7a3a8&oh=00_Af1L4LRe8_1z5dLnX-AN9yxOAgdqLsWLKQ0gps6VoPD88w&oe=69D53AA2", title: "Explore Your Courses Easily" },
-  { id: "3", image: "https://codeforces.com/userpic.codeforces.org/3855328/title/d29cab9da9e6ef26.jpg", title: "Build Your Skills" },
-];
+const HERO_BANNER = {
+  image: require("../../assets/dash.jpg"),
+  title: "Welcome to AttendQR",
+};
 
-function HeroSlider({ scrollY }: { scrollY: SharedValue<number> }) {
-  const [activeIndex, setActiveIndex] = useState(0);
-  const flatListRef = useRef<FlatList>(null);
-
-  const imageStyle = useAnimatedStyle(() => ({
-    transform: [{ translateY: interpolate(scrollY.value, [-200, 0, 200], [-80, 0, 80], Extrapolation.CLAMP) }],
-  }));
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      const nextIndex = (activeIndex + 1) % SLIDER_DATA.length;
-      flatListRef.current?.scrollToIndex({ index: nextIndex, animated: true });
-    }, 4000);
-    return () => clearInterval(interval);
-  }, [activeIndex]);
-
-  const onViewableItemsChanged = useRef(({ viewableItems }: any) => {
-    if (viewableItems.length > 0) setActiveIndex(viewableItems[0].index || 0);
-  }).current;
-
+function HeroSlider() {
   return (
     <Animated.View entering={FadeInDown.delay(100).springify()} style={styles.sliderContainer}>
-      <FlatList
-        ref={flatListRef}
-        data={SLIDER_DATA}
-        horizontal
-        pagingEnabled
-        showsHorizontalScrollIndicator={false}
-        keyExtractor={(item) => item.id}
-        onViewableItemsChanged={onViewableItemsChanged}
-        viewabilityConfig={{ viewAreaCoveragePercentThreshold: 50 }}
-        scrollEventThrottle={16}
-        renderItem={({ item }) => (
-          <View style={styles.slideItem}>
-            <Animated.Image source={{ uri: item.image }} style={[styles.slideImage, imageStyle]} />
-            <LinearGradient colors={["transparent", "rgba(0,0,0,0.8)"]} style={styles.slideOverlay}>
-              <Text style={styles.slideTitle}>{item.title}</Text>
-            </LinearGradient>
-          </View>
-        )}
-      />
-      
-      {/* Animated Pagination Dots */}
-      <View style={styles.paginationDots}>
-        {SLIDER_DATA.map((_, i) => {
-          const isActive = activeIndex === i;
-          return (
-            <Animated.View
-              key={i}
-              style={[
-                styles.dot,
-                {
-                  width: withSpring(isActive ? 24 : 8, { damping: 12 }),
-                  backgroundColor: isActive ? BRAND.primary : BRAND.border,
-                },
-              ]}
-            />
-          );
-        })}
+      <View style={styles.slideItem}>
+        <Image source={HERO_BANNER.image} style={styles.slideImage} />
+        <LinearGradient colors={["transparent", "rgba(0,0,0,0.8)"]} style={styles.slideOverlay}>
+          <Text style={styles.slideTitle}>{HERO_BANNER.title}</Text>
+        </LinearGradient>
       </View>
     </Animated.View>
   );
@@ -257,10 +203,17 @@ function ActionCard({ item, onOpenScreen }: any) {
         onOpenScreen(item.id);
       }}
     >
-      <View style={[styles.actionIconContainer, { backgroundColor: `${item.color}15` }]}>
-        <item.icon color={item.color} size={28} strokeWidth={2.5} />
+      <View style={styles.actionCardHead}>
+        <View style={[styles.actionIconContainer, { backgroundColor: `${item.color}16` }]}>
+          <item.icon color={item.color} size={24} strokeWidth={2.4} />
+        </View>
+        <View style={[styles.actionAccent, { backgroundColor: item.color }]} />
       </View>
-      <Text style={styles.actionLabel}>{item.label}</Text>
+
+      <View style={styles.actionTextWrap}>
+        <Text style={styles.actionLabel}>{item.label}</Text>
+        <Text style={styles.actionHint}>{item.hint}</Text>
+      </View>
     </AnimatedPressable>
   );
 }
@@ -295,12 +248,12 @@ function StudentDashboard({ subjects, loading, onOpenScreen }: { subjects: Stude
       {/* Quick Actions (Modern Grid Tile Layout) */}
       <Animated.View entering={FadeInDown.delay(150).springify()} style={styles.actionCardsRow}>
         {[
-          { id: 'QR', icon: QrCode, label: 'QR', color: '#ff6b6b' },
-          { id: 'Materials', icon: BookOpen, label: 'Materials', color: '#5f27cd' },
-          { id: 'Tasks', icon: ClipboardList, label: 'Tasks', color: '#1dd1a1' },
-          { id: 'Quizzes', icon: ClipboardCheck, label: 'Exams', color: '#ff9f43' },
-          { id: 'Workspaces', icon: Users, label: 'Chats', color: '#0abde3' },
-          { id: 'Account', icon: UserIcon, label: 'Account', color: BRAND.primary },
+          { id: 'QR', icon: QrCode, label: 'Scan QR', hint: 'Attendance now', color: '#ff6b6b' },
+          { id: 'Materials', icon: BookOpen, label: 'Materials', hint: 'Lecture files', color: '#5f27cd' },
+          { id: 'Tasks', icon: ClipboardList, label: 'Tasks', hint: 'Due items', color: '#1dd1a1' },
+          { id: 'Quizzes', icon: ClipboardCheck, label: 'Exams', hint: 'Start quiz', color: '#ff9f43' },
+          { id: 'Workspaces', icon: Users, label: 'Chats', hint: 'Class spaces', color: '#0abde3' },
+          { id: 'Account', icon: UserIcon, label: 'Account', hint: 'Profile settings', color: BRAND.primary },
         ].map((item) => (
           <ActionCard key={item.id} item={item} onOpenScreen={onOpenScreen} />
         ))}
@@ -387,6 +340,9 @@ export default function DashboardNativeScreen({ token, user }: { token: string; 
   const [refreshing, setRefreshing] = useState(false);
   const [studentSubjects, setStudentSubjects] = useState<any[]>([]);
   const [studentLoading, setStudentLoading] = useState(true);
+  const [profileUser, setProfileUser] = useState<User>(user);
+  const [collegeLogoFailed, setCollegeLogoFailed] = useState(false);
+  const [universityLogoFailed, setUniversityLogoFailed] = useState(false);
   const sheetRef = useRef<BottomSheet>(null);
   const snapPoints = useMemo(() => ["25%", "50%"], []);
   const isStudent = user?.role === "student";
@@ -415,6 +371,35 @@ export default function DashboardNativeScreen({ token, user }: { token: string; 
     setStudentLoading(true);
     fetchStudentAttendance();
   }, [isStudent, fetchStudentAttendance]);
+
+  useEffect(() => {
+    setProfileUser(user);
+    setCollegeLogoFailed(false);
+    setUniversityLogoFailed(false);
+  }, [user]);
+
+  useEffect(() => {
+    let active = true;
+
+    const refreshProfile = async () => {
+      try {
+        const freshUser = await getMe(token);
+        if (active && freshUser?.id) {
+          setProfileUser(freshUser);
+          setCollegeLogoFailed(false);
+          setUniversityLogoFailed(false);
+        }
+      } catch {
+        // Keep the current user object if the refresh fails.
+      }
+    };
+
+    void refreshProfile();
+
+    return () => {
+      active = false;
+    };
+  }, [token]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -451,13 +436,13 @@ export default function DashboardNativeScreen({ token, user }: { token: string; 
   }));
 
   const displayName = useMemo(() => {
-    const fullName = (user?.name || "User").trim();
+    const fullName = (profileUser?.name || "User").trim();
     const parts = fullName.split(/\s+/).filter(Boolean);
     return parts.slice(0, 3).join(" ") || "User";
-  }, [user?.name]);
+  }, [profileUser?.name]);
 
-  const universityLogoUri = useMemo(() => resolveMediaUrl(user?.university_logo), [user?.university_logo]);
-  const collegeLogoUri = useMemo(() => resolveMediaUrl(user?.college_logo), [user?.college_logo]);
+  const universityLogoUri = useMemo(() => resolveMediaUrl(profileUser?.university_logo), [profileUser?.university_logo]);
+  const collegeLogoUri = useMemo(() => resolveMediaUrl(profileUser?.college_logo), [profileUser?.college_logo]);
 
   const openScreen = (screen: string, params?: Record<string, any>) => {
     navigation.navigate(screen as never, params as never);
@@ -482,16 +467,27 @@ export default function DashboardNativeScreen({ token, user }: { token: string; 
 
         <Animated.View style={[styles.logoContainer, logoStyle]}>
           <View style={styles.logosStack}>
-            {collegeLogoUri ? (
-              <Image source={{ uri: collegeLogoUri }} style={styles.institutionLogo} />
+            {collegeLogoUri && !collegeLogoFailed ? (
+              <Image
+                source={{ uri: collegeLogoUri }}
+                style={styles.institutionLogo}
+                resizeMode="contain"
+                onError={() => setCollegeLogoFailed(true)}
+              />
             ) : null}
-            {universityLogoUri ? (
-              <Image source={{ uri: universityLogoUri }} style={styles.institutionLogo} />
-            ) : (
-              <View style={[styles.institutionLogo, { backgroundColor: getAvatarColor(user?.name || "") }]}> 
-                <Text style={styles.heroAvatarText}>{(user?.name || "U").charAt(0).toUpperCase()}</Text>
+            {universityLogoUri && !universityLogoFailed ? (
+              <Image
+                source={{ uri: universityLogoUri }}
+                style={styles.institutionLogo}
+                resizeMode="contain"
+                onError={() => setUniversityLogoFailed(true)}
+              />
+            ) : null}
+            {!collegeLogoUri && !universityLogoUri ? (
+              <View style={[styles.institutionLogo, { backgroundColor: getAvatarColor(profileUser?.name || "") }]}>
+                <Text style={styles.heroAvatarText}>{(profileUser?.name || "U").charAt(0).toUpperCase()}</Text>
               </View>
-            )}
+            ) : null}
           </View>
         </Animated.View>
       </Animated.View>
@@ -503,7 +499,7 @@ export default function DashboardNativeScreen({ token, user }: { token: string; 
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={BRAND.primary} />}
       >
-        <HeroSlider scrollY={scrollY} />
+        <HeroSlider />
 
         {isStudent && <StudentDashboard subjects={studentSubjects} loading={studentLoading} onOpenScreen={openScreen} />}
       </Animated.ScrollView>
@@ -564,31 +560,51 @@ const styles = StyleSheet.create({
   emptyContainer: { alignItems: "center", marginTop: 20 },
   emptyText: { marginTop: -10, fontSize: 16, color: BRAND.textMuted, fontWeight: "600" },
 
-  actionCardsRow: { 
-    flexDirection: "row", 
-    flexWrap: "wrap", 
-    justifyContent: "space-between", 
+  actionCardsRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "space-between",
     marginBottom: 20,
-    paddingHorizontal: 2
+    rowGap: 12,
   },
-  actionCard: { 
-    alignItems: "center", 
-    justifyContent: "center",
-    width: "31%", 
+  actionCard: {
+    width: "48.5%",
+    minHeight: 126,
     backgroundColor: BRAND.surface,
-    paddingVertical: 18,
     borderRadius: 20,
-    marginBottom: 14,
-    shadowColor: '#000', 
-    shadowOffset: { width: 0, height: 4 }, 
-    shadowOpacity: 0.04, 
-    shadowRadius: 10, 
-    elevation: 2,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.05,
+    shadowRadius: 12,
+    elevation: 3,
     borderWidth: 1,
-    borderColor: 'rgba(0,0,0,0.02)'
+    borderColor: 'rgba(0,0,0,0.04)'
   },
-  actionIconContainer: { width: 56, height: 56, borderRadius: 18, justifyContent: "center", alignItems: "center", marginBottom: 12 },
-  actionLabel: { fontSize: 13, fontWeight: "700", color: BRAND.textMuted },
+  actionCardHead: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 12,
+  },
+  actionIconContainer: {
+    width: 46,
+    height: 46,
+    borderRadius: 14,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  actionAccent: {
+    width: 18,
+    height: 6,
+    borderRadius: 999,
+  },
+  actionTextWrap: {
+    gap: 4,
+  },
+  actionLabel: { fontSize: 15, fontWeight: "800", color: BRAND.text },
+  actionHint: { fontSize: 12, fontWeight: "600", color: BRAND.textMuted },
 
   cardShadow: {
     backgroundColor: BRAND.surface, borderRadius: 20,

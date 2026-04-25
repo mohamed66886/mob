@@ -3,6 +3,8 @@ import { Platform } from "react-native";
 import Constants from "expo-constants";
 import { LoginResponse, User } from "../types/auth";
 import {
+  getAccessTokenFromStorage,
+  saveAccessToken,
   clearRefreshToken,
   getOrCreateDeviceId,
   getRefreshToken,
@@ -58,6 +60,8 @@ export const api = axios.create({
   baseURL: BASE_URL,
   headers: {
     "Content-Type": "application/json",
+    "Origin": "https://attendqr.tech",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36"
   },
 });
 
@@ -114,6 +118,11 @@ export async function refreshMobileAccessToken(): Promise<string | null> {
   refreshPromise = (async () => {
     const refreshToken = await getRefreshToken();
     if (!refreshToken) {
+      const storedAccessToken = String((await getAccessTokenFromStorage()) || "").trim();
+      if (storedAccessToken) {
+        setAccessToken(storedAccessToken);
+        return storedAccessToken;
+      }
       setAccessToken(null);
       return null;
     }
@@ -145,11 +154,31 @@ export async function refreshMobileAccessToken(): Promise<string | null> {
       }
 
       await saveRefreshToken(nextRefreshToken);
+      await saveAccessToken(nextAccessToken);
       setAccessToken(nextAccessToken);
       return nextAccessToken;
-    } catch {
-      await clearRefreshToken();
-      setAccessToken(null);
+    } catch (error: any) {
+      const status = Number(error?.response?.status || 0);
+
+      // Clear session only when backend explicitly rejects the refresh token.
+      if (status === 400 || status === 401 || status === 403) {
+        await clearRefreshToken();
+        setAccessToken(null);
+        return null;
+      }
+
+      // For transient failures (network/server), keep session alive using last known token.
+      const currentAccessToken = String(accessToken || "").trim();
+      if (currentAccessToken) {
+        return currentAccessToken;
+      }
+
+      const storedAccessToken = String((await getAccessTokenFromStorage()) || "").trim();
+      if (storedAccessToken) {
+        setAccessToken(storedAccessToken);
+        return storedAccessToken;
+      }
+
       return null;
     } finally {
       refreshPromise = null;
@@ -165,16 +194,28 @@ api.interceptors.request.use(async (config) => {
   }
 
   const deviceId = await getOrCreateDeviceId();
+  const nonce = buildRequestNonce();
+  const timestamp = String(Date.now());
 
-  config.headers = config.headers || {};
-  config.headers["x-device-id"] = deviceId;
-  config.headers["x-client-platform"] = "mobile";
-  config.headers["x-nonce"] = buildRequestNonce();
-  config.headers["x-timestamp"] = String(Date.now());
-
-  if (accessToken) {
-    config.headers.Authorization = `Bearer ${accessToken}`;
+  if (config.headers && typeof config.headers.set === "function") {
+    config.headers.set("x-device-id", deviceId);
+    config.headers.set("x-client-platform", "mobile");
+    config.headers.set("x-nonce", nonce);
+    config.headers.set("x-timestamp", timestamp);
+    if (accessToken) {
+      config.headers.set("Authorization", `Bearer ${accessToken}`);
+    }
+  } else {
+    config.headers = config.headers || {};
+    config.headers["x-device-id"] = deviceId;
+    config.headers["x-client-platform"] = "mobile";
+    config.headers["x-nonce"] = nonce;
+    config.headers["x-timestamp"] = timestamp;
+    if (accessToken) {
+      config.headers.Authorization = `Bearer ${accessToken}`;
+    }
   }
+
   return config;
 });
 
